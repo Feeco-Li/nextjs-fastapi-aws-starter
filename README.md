@@ -49,9 +49,7 @@ Creates Cognito User Pool, API Gateway, and Lambda. Writes `frontend/.env.local`
 
 ### 4. Deploy frontend
 
-**Option A — GitHub-connected Amplify (recommended)**
-
-Push to your own GitHub repo, then connect it in Amplify Console:
+Push to your GitHub repo, then connect it in Amplify Console:
 
 1. Amplify Console → New app → Host web app → Connect GitHub repo
 2. App settings → Environment variables → add the 4 values from `frontend/.env.local`:
@@ -62,14 +60,6 @@ Push to your own GitHub repo, then connect it in Amplify Console:
    NEXT_PUBLIC_API_URL
    ```
 3. Amplify builds and deploys automatically on every push to `main`
-
-**Option B — Manual upload (no GitHub required)**
-
-```bash
-make deploy-frontend
-```
-
-Creates an Amplify app, builds Next.js, and uploads the output. Prints the live URL when done.
 
 ---
 
@@ -146,7 +136,6 @@ const result = await apiClient.post('/api/v1/my-resource', { key: 'value' });
 ```bash
 make install          # Install all dependencies (infra + frontend + backend)
 make deploy           # Deploy CDK stack + write frontend/.env.local
-make deploy-frontend  # Build and deploy frontend to Amplify (manual mode)
 make destroy          # Delete Amplify app + CDK stack
 make outputs          # Print CDK stack outputs
 make dev-backend      # Run FastAPI locally on :8000
