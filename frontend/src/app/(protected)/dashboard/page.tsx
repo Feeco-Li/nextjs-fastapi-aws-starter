@@ -1,15 +1,12 @@
 'use client';
 
 /**
- * Protected dashboard — only reachable after Cognito sign-in.
- *
- * Auth guard: useAuthenticator checks session; if no user, redirects to /.
- * API calls: apiGet() automatically attaches the Cognito access token.
+ * Protected dashboard — route protection handled by middleware.ts.
+ * This page is only reachable if the middleware confirmed a valid session.
  */
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuthenticator } from '@aws-amplify/ui-react';
-import { apiGet } from '@/lib/api-client';
+import apiClient from '@/lib/api-client';
 
 interface Item {
   id: number;
@@ -19,28 +16,17 @@ interface Item {
 
 export default function Dashboard() {
   const { user, signOut } = useAuthenticator((ctx) => [ctx.user]);
-  const router = useRouter();
 
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Redirect unauthenticated users to sign-in
   useEffect(() => {
-    if (!user) router.replace('/');
-  }, [user, router]);
-
-  // Fetch protected data from FastAPI once authenticated
-  useEffect(() => {
-    if (!user) return;
-
-    apiGet<Item[]>('/api/v1/items')
-      .then(setItems)
+    apiClient.get<Item[]>('/api/v1/items')
+      .then((res) => setItems(res.data))
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [user]);
-
-  if (!user) return null;
+  }, []);
 
   return (
     <main className="min-h-screen bg-gray-50">

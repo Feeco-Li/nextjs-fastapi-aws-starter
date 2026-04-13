@@ -28,7 +28,7 @@ AWS Lambda (FastAPI via Mangum)
 | Auth provider | Amazon Cognito User Pool | email/password, SRP flow, no app-client secret |
 | Frontend | Next.js 14 App Router — **static export** | Amplify manual deployment (no Git required) |
 | Auth UI | `@aws-amplify/ui-react` `<Authenticator>` | zero custom auth code |
-| Token handling | `aws-amplify` v6 | auto-refresh, `localStorage` (static export) |
+| Token handling | `aws-amplify` v6 | auto-refresh, cookies (`{ ssr: true }`) |
 | API auth | API Gateway JWT Authorizer | Cognito public keys, validated before Lambda |
 | Backend | FastAPI + Mangum | stateless, no sessions, no login endpoints |
 | Package manager | uv | Python deps managed via `pyproject.toml` |
@@ -67,26 +67,27 @@ AWS Lambda (FastAPI via Mangum)
 │           ├── health.py           # GET /health — public (no authorizer)
 │           └── items.py            # GET /api/v1/items, /api/v1/items/{id} — protected
 │
-└── frontend/                       # Next.js 14 (static export)
+└── frontend/                       # Next.js 14 (SSR)
     ├── package.json
-    ├── next.config.mjs             # output: 'export', trailingSlash: true
+    ├── next.config.mjs             # reactStrictMode only — SSR default
     ├── tsconfig.json
     ├── tailwind.config.ts
     ├── postcss.config.mjs
-    ├── amplify.yml
+    ├── amplify.yml                 # GitHub-connected Amplify build (SSR)
     ├── .env.local.example
     └── src/
+        ├── middleware.ts                         # protects routes — reads Cognito cookies
         ├── app/
         │   ├── layout.tsx                        # Providers + ConfigureAmplify
         │   ├── globals.css
         │   ├── page.tsx                          # public — Authenticator UI
-        │   └── (protected)/dashboard/page.tsx   # protected — calls FastAPI
+        │   └── (protected)/dashboard/page.tsx   # protected — calls FastAPI via axios
         ├── components/
-        │   ├── ConfigureAmplify.tsx              # Amplify.configure() — no ssr:true
+        │   ├── ConfigureAmplify.tsx              # Amplify.configure({ ssr: true }) — tokens in cookies
         │   └── Providers.tsx                     # Authenticator.Provider wrapper
         └── lib/
             ├── amplify-config.ts                 # reads NEXT_PUBLIC_* env vars
-            └── api-client.ts                     # apiFetch / apiGet / apiPost
+            └── api-client.ts                     # axios instance — auto-attaches Bearer token
 ```
 
 ---
@@ -107,7 +108,10 @@ make deploy-frontend
 cd infra && npx cdk deploy --require-approval never
 
 # Redeploy frontend only after changes
+# Option A — manual zip upload (no GitHub)
 make deploy-frontend
+# Option B — GitHub-connected Amplify (push to main → Amplify rebuilds automatically)
+git push origin main
 
 # Print backend stack outputs
 make outputs
@@ -151,30 +155,39 @@ This creates the `CDKToolkit` stack (S3 bucket + IAM roles). One-time per accoun
 ## How the Auth Flow Works
 
 1. User visits `/` → `<Authenticator>` renders sign-in/sign-up UI (no custom code).
-2. On success, Amplify stores tokens in `localStorage` (static export — no `ssr: true`).
+2. On success, Amplify stores tokens in **cookies** (`{ ssr: true }` in `ConfigureAmplify.tsx`).
 3. `RedirectWhenSignedIn` detects `user` and calls `router.replace('/dashboard')`.
-4. Dashboard calls `apiGet('/api/v1/items')` → `api-client.ts` calls
+4. Browser navigates to `/dashboard` → `middleware.ts` runs first, reads Cognito cookies,
+   calls `fetchAuthSession()` server-side. No valid session → redirect to `/`.
+5. Dashboard calls `apiClient.get('/api/v1/items')` → axios request interceptor calls
    `fetchAuthSession()` to get the current access token, attaches it as
    `Authorization: Bearer <token>`.
-5. API Gateway checks the JWT against Cognito's public keys.
+6. API Gateway checks the JWT against Cognito's public keys.
    Invalid/missing token → `401` before Lambda is invoked.
    Valid token → Lambda runs, FastAPI handles the request.
-6. When the access token expires, `fetchAuthSession()` automatically uses the
+7. When the access token expires, `fetchAuthSession()` automatically uses the
    refresh token. FastAPI never sees expired tokens.
 
 ---
 
 ## Amplify Deployment
 
+Two deployment modes are supported:
+
+**Option A — GitHub-connected (recommended)**
+Connect the repo in Amplify Console → Amplify rebuilds on every push to `main`.
+`NEXT_PUBLIC_*` env vars must be set in **Amplify Console → App settings → Environment variables**
+(they are not in `.env.local` which is gitignored).
+
+**Option B — Manual zip upload (no GitHub)**
 `scripts/deploy-frontend.sh` manages the Amplify app:
 - **First run** — creates the Amplify app, branch, and SPA rewrite rule.
   Saves the app ID to `.amplify-app-id` (gitignored).
 - **Subsequent runs** — reads the ID from `.amplify-app-id` and redeploys.
 - **Destroy** — `make destroy` reads `.amplify-app-id`, deletes the app, removes the file.
 
-The `NEXT_PUBLIC_*` env vars are **baked into the JS bundle** during `npm run build`
-from `frontend/.env.local`. Setting them on the Amplify branch is not needed for
-manual deployments (only needed for Git-connected builds where Amplify rebuilds from source).
+For manual deployments, `NEXT_PUBLIC_*` env vars are read from `frontend/.env.local`
+(written by `scripts/post-deploy.sh`) and baked into the JS bundle at build time.
 
 ---
 
@@ -202,24 +215,27 @@ All `/{proxy+}` routes are automatically protected by the JWT Authorizer in `sta
 
 ## Adding a New Protected Frontend Page
 
-Protected pages go in `src/app/(protected)/`. Standard guard pattern:
+1. Create the page under `src/app/(protected)/mypage/page.tsx` — no auth guard needed in the component, middleware handles it.
 
+2. Add the path to the `matcher` in `src/middleware.ts`:
+```typescript
+export const config = {
+  matcher: ['/dashboard/:path*', '/mypage/:path*'],
+};
+```
+
+3. Use `apiClient` for any backend calls:
 ```tsx
 'use client';
-import { useAuthenticator } from '@aws-amplify/ui-react';
-import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import apiClient from '@/lib/api-client';
 
 export default function MyPage() {
-  const { user } = useAuthenticator((ctx) => [ctx.user]);
-  const router = useRouter();
-  useEffect(() => { if (!user) router.replace('/'); }, [user, router]);
-  if (!user) return null;
-  // ... page content
+  // apiClient automatically attaches the Bearer token
+  const res = await apiClient.get('/api/v1/my-resource');
 }
 ```
 
-After changes: `make deploy-frontend`
+After changes: push to GitHub (Option A) or `make deploy-frontend` (Option B).
 
 ---
 
@@ -246,9 +262,14 @@ api.addRoutes({ path: '/{proxy+}', methods: [HttpMethod.ANY], integration, autho
 ## Key Constraints
 
 - **`next.config.mjs` not `.ts`** — Next.js 14.2 does not support TypeScript config files.
+- **`{ ssr: true }` in `ConfigureAmplify.tsx`** — required for middleware-based route protection.
+  Stores tokens in cookies instead of `localStorage`. Do not remove it.
+- **`middleware.ts` matcher must be updated** for every new protected route — middleware only
+  runs on paths listed in `matcher`. Forgetting this leaves a route unprotected.
 - **`backend/requirements.txt` is not committed** — CDK bundles deps via Docker at deploy time.
   If you need it locally (e.g. IDE autocomplete): `cd backend && uv export --no-hashes --no-dev -o requirements.txt`
 - **`frontend/.env.local` is generated** by `scripts/post-deploy.sh` — never commit it.
+  For GitHub-connected Amplify, set env vars in Amplify Console instead.
 - **`.amplify-app-id` is generated** by `scripts/deploy-frontend.sh` — never commit it.
 - **No auth logic in FastAPI** — do not add JWT decode, session middleware, or login endpoints.
   The contract: if Lambda runs, the request is authenticated.

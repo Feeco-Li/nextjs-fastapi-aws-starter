@@ -10,8 +10,9 @@
 import { Amplify } from 'aws-amplify';
 import amplifyConfig from '@/lib/amplify-config';
 
-// No { ssr: true } — static export has no server; tokens live in localStorage
-Amplify.configure(amplifyConfig);
+// { ssr: true } stores tokens in cookies instead of localStorage,
+// enabling server-side session reads in middleware and Server Components.
+Amplify.configure(amplifyConfig, { ssr: true });
 
 export default function ConfigureAmplify() {
   return null;
