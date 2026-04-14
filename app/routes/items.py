@@ -1,48 +1,51 @@
 """
-Example protected resource.
+Items resource — backed by DynamoDB.
 
 By the time a request reaches this handler:
   • API Gateway has already validated the Cognito JWT.
   • An invalid / missing token would have received a 401 before Lambda ran.
 
 FastAPI has zero auth logic — just business logic.
-Replace the in-memory list with real DB queries as needed.
 """
-from typing import Annotated
+import os
 
-from fastapi import APIRouter, Header, HTTPException
+import boto3
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 router = APIRouter(tags=["items"])
 
+# TABLE_NAME is injected by CDK as a Lambda environment variable.
+table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
+
 
 class Item(BaseModel):
-    id: int
+    id: str
     name: str
     description: str
 
 
-# Sample data — swap for a real data source
-_ITEMS: list[Item] = [
-    Item(id=1, name="Widget A", description="First sample item"),
-    Item(id=2, name="Widget B", description="Second sample item"),
-    Item(id=3, name="Widget C", description="Third sample item"),
-]
-
-
 @router.get("/items", response_model=list[Item])
-async def list_items(
-    # The Authorization header is forwarded by API Gateway.
-    # Read it here only if you need the caller's identity (e.g. for audit logs).
-    # You do NOT need to validate it — that's already done.
-    authorization: Annotated[str | None, Header()] = None,
-) -> list[Item]:
-    return _ITEMS
+async def list_items() -> list[Item]:
+    result = table.scan()
+    return result["Items"]
 
 
 @router.get("/items/{item_id}", response_model=Item)
-async def get_item(item_id: int) -> Item:
-    for item in _ITEMS:
-        if item.id == item_id:
-            return item
-    raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+async def get_item(item_id: str) -> Item:
+    result = table.get_item(Key={"id": item_id})
+    item = result.get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+    return item
+
+
+@router.post("/items", response_model=Item, status_code=201)
+async def create_item(item: Item) -> Item:
+    table.put_item(Item=item.model_dump())
+    return item
+
+
+@router.delete("/items/{item_id}", status_code=204)
+async def delete_item(item_id: str) -> None:
+    table.delete_item(Key={"id": item_id})
