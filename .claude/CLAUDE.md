@@ -28,7 +28,7 @@ Amazon DynamoDB
 | Database | DynamoDB | PAY_PER_REQUEST billing, table name injected via env var |
 | Package manager | uv | Python deps via `pyproject.toml` |
 | IaC | **AWS CDK** (TypeScript) | type-safe, single `cdk deploy` + `cdk destroy` |
-| Runtime | Python 3.13 / arm64 (Graviton2) | cheaper + faster cold starts |
+| Runtime | Python 3.13 / x86_64 | compatible with standard x86 dev machines |
 
 ---
 
@@ -101,7 +101,7 @@ cdk deploy
 
 **Bootstrap requirement:** First-ever CDK deploy needs:
 ```bash
-npx cdk bootstrap aws://<account-id>/us-east-1
+npx cdk bootstrap
 ```
 One-time per account/region. Creates the `CDKToolkit` stack.
 
@@ -145,11 +145,21 @@ database.ordersTable.grantReadWriteData(apiFn);
 
 **3. `app/routes/orders.py`** — use the table:
 ```python
-import os, boto3
-table = boto3.resource("dynamodb").Table(os.environ["ORDERS_TABLE"])
+import boto3
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    orders_table: str
+    model_config = {"env_file": ".env", "extra": "ignore"}
+
+table = boto3.resource("dynamodb").Table(Settings().orders_table)
 ```
 
-**4. Register in `app/main.py`** and redeploy.
+**4. Register in `app/main.py`**, then:
+```bash
+make deploy    # creates the table, existing tables untouched
+make outputs   # rewrites .env with the new table name
+```
 
 ---
 
@@ -169,7 +179,7 @@ table = boto3.resource("dynamodb").Table(os.environ["ORDERS_TABLE"])
    from app.routes import myroute
    app.include_router(myroute.router, prefix="/api/v1")
    ```
-3. `npx cdk deploy --require-approval never`
+3. `make deploy`
 
 All `/{proxy+}` routes are automatically protected by the JWT Authorizer.
 
