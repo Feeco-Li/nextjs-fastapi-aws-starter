@@ -11,17 +11,8 @@ see the commented-out section below.
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings
+from app.config import get_settings
 import boto3
-
-
-class Settings(BaseSettings):
-    items_table: str
-
-    model_config = {"env_file": ".env", "extra": "ignore"}
-
-
-settings = Settings()
 
 router = APIRouter(tags=["items"])
 
@@ -73,7 +64,7 @@ class Item(BaseModel):
 # ── DynamoDB (uncomment when table is provisioned) ────────────────────────────
 #
 
-table = boto3.resource("dynamodb").Table(settings.items_table)
+table = boto3.resource("dynamodb").Table(get_settings().items_table)
 
 
 @router.get("/items", response_model=list[Item])
