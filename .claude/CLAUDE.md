@@ -65,10 +65,10 @@ Prefer `make` over `npm run` or raw CLI commands in this project (mixed Python +
 
 ```bash
 make install   # npm install + uv sync
-make dev       # uvicorn on :8000
+make dev       # uvicorn on :8000 (auto-loads .env)
 make deploy    # npx cdk deploy --require-approval never
 make destroy   # npx cdk destroy
-make outputs   # print Cognito + API Gateway values from CloudFormation
+make outputs   # print CloudFormation outputs + write .env (run after deploy)
 ```
 
 ---
