@@ -1,6 +1,6 @@
 # fastapi-cdk-starter
 
-A production-ready AWS backend starter — FastAPI + Amazon Cognito, deployed with AWS CDK.
+A production-ready AWS backend starter — FastAPI + Amazon Cognito + DynamoDB, deployed with AWS CDK.
 
 ## Stack
 
@@ -9,6 +9,7 @@ A production-ready AWS backend starter — FastAPI + Amazon Cognito, deployed wi
 | Auth | Amazon Cognito User Pool |
 | Backend | FastAPI on Lambda (arm64, Python 3.13) via Mangum |
 | API | HTTP API Gateway v2 — JWT Authorizer (Cognito) |
+| Database | Amazon DynamoDB |
 | Infrastructure | AWS CDK (TypeScript) |
 | Package manager | uv (Python), npm (Node) |
 
@@ -16,20 +17,24 @@ A production-ready AWS backend starter — FastAPI + Amazon Cognito, deployed wi
 
 ```
 .
-├── pyproject.toml          # Python deps (uv)
-├── handler.py              # Lambda entry: Mangum(app)
+├── pyproject.toml              # Python deps (uv)
+├── handler.py                  # Lambda entry: Mangum(app)
 ├── app/
-│   ├── main.py             # FastAPI app + CORS middleware
+│   ├── main.py                 # FastAPI app + CORS middleware
 │   └── routes/
-│       ├── health.py       # GET /health — public
-│       └── items.py        # GET /api/v1/items — protected (JWT required)
-├── package.json            # CDK deps (npm)
+│       ├── health.py           # GET /health — public
+│       └── items.py            # CRUD /api/v1/items — protected (JWT required)
+├── package.json                # CDK deps (npm)
 ├── tsconfig.json
-├── cdk.json                # CDK entry: bin/app.ts
+├── cdk.json
 ├── bin/
-│   └── app.ts              # CDK app — instantiates MainStack
+│   └── app.ts                  # CDK app entry point
 └── lib/
-    └── stack.ts            # All AWS resources
+    ├── stack.ts                # Composes constructs + outputs
+    └── constructs/
+        ├── auth.ts             # Cognito User Pool + Client
+        ├── database.ts         # DynamoDB tables
+        └── api.ts              # Lambda + API Gateway + JWT Authorizer
 ```
 
 ## Prerequisites
@@ -53,8 +58,8 @@ npx cdk bootstrap aws://<account-id>/us-east-1
 ### 2. Install dependencies
 
 ```bash
-npm install        # CDK
-uv sync            # FastAPI (local dev)
+npm install    # CDK
+uv sync        # FastAPI (local dev)
 ```
 
 ### 3. Deploy
@@ -63,7 +68,7 @@ uv sync            # FastAPI (local dev)
 npx cdk deploy --require-approval never
 ```
 
-CDK outputs four values — copy them into your frontend's environment variables:
+After deploy, CDK prints four output values — copy them into your frontend's environment variables:
 
 ```
 UserPoolId        →  NEXT_PUBLIC_USER_POOL_ID
@@ -82,6 +87,9 @@ uv run uvicorn app.main:app --reload --port 8000
 
 Swagger UI: http://localhost:8000/docs
 
+> Note: DynamoDB routes require `TABLE_NAME` env var and AWS credentials.
+> Point at a real AWS table or use [DynamoDB Local](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.html).
+
 ---
 
 ## Tear Down
@@ -94,7 +102,50 @@ npx cdk destroy
 
 ## Customisation
 
-**Add a protected route**
+### Add a new DynamoDB table
+
+1. **`lib/constructs/database.ts`** — add the table (uncomment the placeholder):
+   ```typescript
+   readonly ordersTable: dynamodb.Table;
+
+   this.ordersTable = new dynamodb.Table(this, 'OrdersTable', {
+     tableName: `${stackName}-orders`,
+     partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+     billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+     removalPolicy: cdk.RemovalPolicy.DESTROY,
+   });
+   ```
+
+2. **`lib/constructs/api.ts`** — inject env var and grant access (uncomment the placeholders):
+   ```typescript
+   environment: {
+     ORDERS_TABLE: database.ordersTable.tableName,
+   },
+   // ...
+   database.ordersTable.grantReadWriteData(apiFn);
+   ```
+
+3. **`app/routes/orders.py`** — new route file:
+   ```python
+   import os, boto3
+   from fastapi import APIRouter
+   router = APIRouter(tags=["orders"])
+   table = boto3.resource("dynamodb").Table(os.environ["ORDERS_TABLE"])
+
+   @router.get("/orders")
+   async def list_orders():
+       return table.scan()["Items"]
+   ```
+
+4. **`app/main.py`** — register the router:
+   ```python
+   from app.routes import orders
+   app.include_router(orders.router, prefix="/api/v1")
+   ```
+
+5. Redeploy: `npx cdk deploy --require-approval never`
+
+### Add a protected API route
 
 1. Create `app/routes/myroute.py`:
    ```python
@@ -112,11 +163,11 @@ npx cdk destroy
    ```
 3. Redeploy: `npx cdk deploy --require-approval never`
 
-All `/{proxy+}` routes are automatically protected by the JWT Authorizer.
+All `/{proxy+}` routes are automatically protected by the JWT Authorizer — no extra config needed.
 
-**Add a public route**
+### Add a public route
 
-In `lib/stack.ts`, declare the route explicitly before the catch-all:
+In `lib/constructs/api.ts`, declare the route before the catch-all:
 ```typescript
-api.addRoutes({ path: '/products', methods: [HttpMethod.GET], integration });
+api.addRoutes({ path: '/products', methods: [apigwv2.HttpMethod.GET], integration });
 ```

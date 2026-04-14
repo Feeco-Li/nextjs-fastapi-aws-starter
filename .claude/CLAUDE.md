@@ -1,6 +1,6 @@
 # fastapi-cdk-starter
 
-FastAPI + Amazon Cognito on AWS, deployed via AWS CDK.
+FastAPI + Amazon Cognito + DynamoDB on AWS, deployed via AWS CDK.
 Frontend is deployed separately (e.g. Next.js on Amplify, configured manually with CDK outputs).
 
 ---
@@ -17,7 +17,7 @@ Amazon API Gateway (HTTP API v2)
 AWS Lambda (FastAPI via Mangum)
   │  stateless, zero auth logic
   ▼
-(your data layer)
+Amazon DynamoDB
 ```
 
 | Layer | Technology | Key decision |
@@ -25,6 +25,7 @@ AWS Lambda (FastAPI via Mangum)
 | Auth provider | Amazon Cognito User Pool | email/password, SRP flow, no app-client secret |
 | API auth | API Gateway JWT Authorizer | Cognito public keys, validated before Lambda |
 | Backend | FastAPI + Mangum | stateless, no sessions, no login endpoints |
+| Database | DynamoDB | PAY_PER_REQUEST billing, table name injected via env var |
 | Package manager | uv | Python deps via `pyproject.toml` |
 | IaC | **AWS CDK** (TypeScript) | type-safe, single `cdk deploy` + `cdk destroy` |
 | Runtime | Python 3.13 / arm64 (Graviton2) | cheaper + faster cold starts |
@@ -35,20 +36,24 @@ AWS Lambda (FastAPI via Mangum)
 
 ```
 .
-├── pyproject.toml          # Python deps (uv) — FastAPI, Mangum, Pydantic
-├── handler.py              # Lambda entry: Mangum(app)
+├── pyproject.toml              # Python deps (uv) — FastAPI, Mangum, Pydantic, boto3
+├── handler.py                  # Lambda entry: Mangum(app)
 ├── app/
-│   ├── main.py             # FastAPI app + CORS middleware
+│   ├── main.py                 # FastAPI app + CORS middleware
 │   └── routes/
-│       ├── health.py       # GET /health — public (no authorizer)
-│       └── items.py        # GET /api/v1/items, /api/v1/items/{id} — protected
-├── package.json            # CDK deps (npm)
+│       ├── health.py           # GET /health — public (no authorizer)
+│       └── items.py            # CRUD /api/v1/items — protected (JWT required)
+├── package.json                # CDK deps (npm)
 ├── tsconfig.json
-├── cdk.json                # CDK entry: bin/app.ts via ts-node
+├── cdk.json                    # CDK entry: bin/app.ts via ts-node
 ├── bin/
-│   └── app.ts              # CDK app — instantiates MainStack
+│   └── app.ts                  # CDK app — instantiates MainStack
 └── lib/
-    └── stack.ts            # All AWS resources defined here
+    ├── stack.ts                # Composes constructs + CfnOutputs
+    └── constructs/
+        ├── auth.ts             # Cognito User Pool + Client
+        ├── database.ts         # DynamoDB tables
+        └── api.ts              # Lambda + API Gateway + JWT Authorizer
 ```
 
 ---
@@ -60,10 +65,10 @@ AWS Lambda (FastAPI via Mangum)
 npm install          # CDK
 uv sync              # FastAPI (local dev only)
 
-# Deploy backend
+# Deploy
 npx cdk deploy --require-approval never
 
-# Destroy
+# Destroy all resources
 npx cdk destroy
 
 # Print stack outputs
@@ -78,21 +83,30 @@ uv run uvicorn app.main:app --reload --port 8000
 
 ---
 
-## CDK Stack (lib/stack.ts)
+## CDK Constructs (lib/constructs/)
 
-All AWS resources in one TypeScript file. CDK handles:
-- **Lambda bundling** — spins up Docker, runs `pip install .` (reads pyproject.toml), copies `handler.py` and `app/` into the zip. No requirements.txt needed.
-- **Typed references** — `userPool.userPoolId`, `api.url` instead of string interpolation.
-- **RemovalPolicy.DESTROY** on Cognito User Pool — cleans up on `cdk destroy`.
+The stack is split into three constructs. Each owns one slice of infrastructure
+and exposes what others need via public properties.
 
 ```
+stack.ts
+  ├── AuthConstruct     → userPool, userPoolClient
+  ├── DatabaseConstruct → itemsTable (+ future tables)
+  └── ApiConstruct      → apiUrl
+        takes: { auth, database }
+        creates: Lambda + API Gateway
+        grants: table.grantReadWriteData(apiFn) per table
+        injects: TABLE_NAME env vars into Lambda
+```
+
+**Deploy flow:**
+```
 cdk deploy
-  │
-  ├── ts-node compiles stack.ts
+  ├── ts-node compiles constructs + stack
   ├── CDK synthesizes CloudFormation template → cdk.out/
   ├── Docker bundles Lambda (pip install . + cp handler.py app/)
   ├── Uploads zip to CDKToolkit S3 bucket
-  └── CloudFormation creates/updates the stack
+  └── CloudFormation creates/updates all resources
 ```
 
 **Bootstrap requirement:** First-ever CDK deploy needs:
@@ -116,7 +130,40 @@ After `cdk deploy`, copy these outputs into your frontend:
 
 ---
 
-## Adding a New Protected Route
+## Adding a New DynamoDB Table
+
+**1. `lib/constructs/database.ts`** — declare and create the table:
+```typescript
+readonly ordersTable: dynamodb.Table;
+
+this.ordersTable = new dynamodb.Table(this, 'OrdersTable', {
+  tableName: `${stackName}-orders`,
+  partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
+  billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+  removalPolicy: cdk.RemovalPolicy.DESTROY,
+});
+```
+
+**2. `lib/constructs/api.ts`** — inject env var and grant access:
+```typescript
+environment: {
+  ORDERS_TABLE: database.ordersTable.tableName,
+},
+// ...
+database.ordersTable.grantReadWriteData(apiFn);
+```
+
+**3. `app/routes/orders.py`** — use the table:
+```python
+import os, boto3
+table = boto3.resource("dynamodb").Table(os.environ["ORDERS_TABLE"])
+```
+
+**4. Register in `app/main.py`** and redeploy.
+
+---
+
+## Adding a New Protected API Route
 
 1. Create `app/routes/myroute.py`:
    ```python
@@ -140,14 +187,14 @@ All `/{proxy+}` routes are automatically protected by the JWT Authorizer.
 
 ## Adding a Public Route
 
-In `lib/stack.ts`, add an explicit route without an authorizer before the catch-all:
+In `lib/constructs/api.ts`, add an explicit route before the catch-all:
 ```typescript
-api.addRoutes({ path: '/products', methods: [HttpMethod.GET], integration });
+api.addRoutes({ path: '/products', methods: [apigwv2.HttpMethod.GET], integration });
 ```
 
 ---
 
-## Known CORS Gotcha (fixed in stack.ts)
+## Known CORS Gotcha (fixed in api.ts)
 
 **Root cause:** `HttpMethod.ANY` on `/{proxy+}` catches OPTIONS requests and applies
 the JWT Authorizer → OPTIONS returns `401` → browser blocks the request.
@@ -163,6 +210,8 @@ More specific method routes beat `ANY` in API Gateway v2.
   The contract: if Lambda runs, the request is authenticated.
 - **Lambda bundling uses Docker** — `cdk deploy` requires Docker running locally.
   Bundling installs from `pyproject.toml` and copies only `handler.py` + `app/`.
+- **DynamoDB table name** is injected as a Lambda env var by CDK — never hardcode it.
 - **CDKToolkit stack** — required one-time bootstrap per account/region. Do not delete between deploys.
 - **`cdk.out/` is generated** — never commit it.
-- **No `__init__.py` files** — Python 3.13 supports implicit namespace packages. `app/` and `app/routes/` are recognized as packages without them.
+- **No `__init__.py` files** — Python 3.13 supports implicit namespace packages.
+- **boto3 is bundled** in the Lambda zip (listed in `pyproject.toml` dependencies) for version consistency.
