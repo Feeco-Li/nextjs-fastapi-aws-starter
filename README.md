@@ -7,7 +7,7 @@ A production-ready AWS backend starter — FastAPI + Amazon Cognito + DynamoDB, 
 | Layer | Technology |
 |---|---|
 | Auth | Amazon Cognito User Pool |
-| Backend | FastAPI on Lambda (arm64, Python 3.13) via Mangum |
+| Backend | FastAPI on Lambda (x86_64, Python 3.13) via Mangum |
 | API | HTTP API Gateway v2 — JWT Authorizer (Cognito) |
 | Database | Amazon DynamoDB |
 | Infrastructure | AWS CDK (TypeScript) |
@@ -52,7 +52,7 @@ A production-ready AWS backend starter — FastAPI + Amazon Cognito + DynamoDB, 
 ### 1. Bootstrap CDK (one-time per AWS account/region)
 
 ```bash
-npx cdk bootstrap aws://<account-id>/us-east-1
+npx cdk bootstrap
 ```
 
 ### 2. Install dependencies
@@ -67,7 +67,13 @@ make install
 make deploy
 ```
 
-After deploy, CDK prints four output values — copy them into your frontend's environment variables:
+After deploy, run `make outputs` to print stack values and write `.env` for local development:
+
+```bash
+make outputs
+```
+
+Copy the printed values into your frontend's environment variables:
 
 ```
 UserPoolId        →  NEXT_PUBLIC_USER_POOL_ID
@@ -86,8 +92,8 @@ make dev
 
 Swagger UI: http://localhost:8000/docs
 
-> Note: DynamoDB routes require `TABLE_NAME` env var and AWS credentials.
-> Point at a real AWS table or use [DynamoDB Local](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.html).
+`make dev` auto-loads `.env` — run `make outputs` once after deploying to generate it.
+AWS credentials must be configured (`aws configure`) so boto3 can reach DynamoDB.
 
 ---
 
@@ -106,7 +112,7 @@ make install   # install all dependencies (npm + uv)
 make dev       # run FastAPI locally on :8000
 make deploy    # deploy / redeploy CDK stack
 make destroy   # tear down all AWS resources
-make outputs   # print stack outputs (Cognito + API Gateway values)
+make outputs   # print stack outputs + write .env for local dev
 ```
 
 > `Makefile` is used instead of `package.json` scripts because this is a mixed Python + TypeScript project.
@@ -141,10 +147,16 @@ make outputs   # print stack outputs (Cognito + API Gateway values)
 
 3. **`app/routes/orders.py`** — new route file:
    ```python
-   import os, boto3
+   import boto3
    from fastapi import APIRouter
+   from pydantic_settings import BaseSettings
+
+   class Settings(BaseSettings):
+       orders_table: str
+       model_config = {"env_file": ".env", "extra": "ignore"}
+
    router = APIRouter(tags=["orders"])
-   table = boto3.resource("dynamodb").Table(os.environ["ORDERS_TABLE"])
+   table = boto3.resource("dynamodb").Table(Settings().orders_table)
 
    @router.get("/orders")
    async def list_orders():
@@ -157,7 +169,8 @@ make outputs   # print stack outputs (Cognito + API Gateway values)
    app.include_router(orders.router, prefix="/api/v1")
    ```
 
-5. Redeploy: `npx cdk deploy --require-approval never`
+5. `make deploy` — creates the table, existing tables are untouched
+6. `make outputs` — rewrites `.env` with the new table name included
 
 ### Add a protected API route
 
@@ -175,7 +188,7 @@ make outputs   # print stack outputs (Cognito + API Gateway values)
    from app.routes import myroute
    app.include_router(myroute.router, prefix="/api/v1")
    ```
-3. Redeploy: `npx cdk deploy --require-approval never`
+3. `make deploy`
 
 All `/{proxy+}` routes are automatically protected by the JWT Authorizer — no extra config needed.
 
