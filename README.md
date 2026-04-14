@@ -58,14 +58,13 @@ npx cdk bootstrap aws://<account-id>/us-east-1
 ### 2. Install dependencies
 
 ```bash
-npm install    # CDK
-uv sync        # FastAPI (local dev)
+make install
 ```
 
 ### 3. Deploy
 
 ```bash
-npx cdk deploy --require-approval never
+make deploy
 ```
 
 After deploy, CDK prints four output values — copy them into your frontend's environment variables:
@@ -82,7 +81,7 @@ Region            →  NEXT_PUBLIC_AWS_REGION
 ## Local Development
 
 ```bash
-uv run uvicorn app.main:app --reload --port 8000
+make dev
 ```
 
 Swagger UI: http://localhost:8000/docs
@@ -95,7 +94,19 @@ Swagger UI: http://localhost:8000/docs
 ## Tear Down
 
 ```bash
-npx cdk destroy
+make destroy
+```
+
+---
+
+## All Commands
+
+```bash
+make install   # install all dependencies (npm + uv)
+make dev       # run FastAPI locally on :8000
+make deploy    # deploy / redeploy CDK stack
+make destroy   # tear down all AWS resources
+make outputs   # print stack outputs (Cognito + API Gateway values)
 ```
 
 ---
