@@ -4,10 +4,10 @@ import { MainStack } from '../lib/stack';
 
 const app = new cdk.App();
 
-new MainStack(app, 'nextjs-fastapi-template', {
+new MainStack(app, 'fastapi-cdk-starter', {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region:  process.env.CDK_DEFAULT_REGION ?? 'us-east-1',
   },
-  description: 'Next.js + FastAPI + Cognito on AWS (CDK)',
+  description: 'FastAPI + Cognito on AWS (CDK)',
 });

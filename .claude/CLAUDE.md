@@ -1,17 +1,14 @@
-# nextjs-fastapi-template
+# fastapi-cdk-starter
 
-Next.js + FastAPI + Amazon Cognito on AWS.
-Backend via AWS CDK, frontend via Amplify manual deployment (no Git required).
+FastAPI + Amazon Cognito on AWS, deployed via AWS CDK.
+Frontend is deployed separately (e.g. Next.js on Amplify, configured manually with CDK outputs).
 
 ---
 
 ## Architecture
 
 ```
-Browser
-  │  sign-in / sign-up / token refresh
-  ▼
-AWS Amplify Hosting (Next.js static export)
+Browser / Frontend
   │  Authorization: Bearer <Cognito access token>
   ▼
 Amazon API Gateway (HTTP API v2)
@@ -26,12 +23,9 @@ AWS Lambda (FastAPI via Mangum)
 | Layer | Technology | Key decision |
 |---|---|---|
 | Auth provider | Amazon Cognito User Pool | email/password, SRP flow, no app-client secret |
-| Frontend | Next.js 14 App Router — **static export** | Amplify manual deployment (no Git required) |
-| Auth UI | `@aws-amplify/ui-react` `<Authenticator>` | zero custom auth code |
-| Token handling | `aws-amplify` v6 | auto-refresh, cookies (`{ ssr: true }`) |
 | API auth | API Gateway JWT Authorizer | Cognito public keys, validated before Lambda |
 | Backend | FastAPI + Mangum | stateless, no sessions, no login endpoints |
-| Package manager | uv | Python deps managed via `pyproject.toml` |
+| Package manager | uv | Python deps via `pyproject.toml` |
 | IaC | **AWS CDK** (TypeScript) | type-safe, single `cdk deploy` + `cdk destroy` |
 | Runtime | Python 3.13 / arm64 (Graviton2) | cheaper + faster cold starts |
 
@@ -41,53 +35,20 @@ AWS Lambda (FastAPI via Mangum)
 
 ```
 .
-├── Makefile                        # all commands
-├── .gitignore
-├── .amplify-app-id                 # auto-created by deploy-frontend.sh (gitignored)
-├── scripts/
-│   ├── post-deploy.sh              # reads CF outputs → writes frontend/.env.local
-│   └── deploy-frontend.sh         # creates/reuses Amplify app, uploads static export
-│
-├── infra/                          # AWS CDK project (TypeScript)
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── cdk.json                    # entry point: bin/app.ts via ts-node
-│   ├── bin/
-│   │   └── app.ts                  # CDK app — instantiates MainStack
-│   └── lib/
-│       └── stack.ts                # all AWS resources defined here
-│
-├── backend/                        # FastAPI Lambda
-│   ├── pyproject.toml              # uv project (python 3.13)
-│   ├── uv.lock
-│   ├── handler.py                  # Lambda entry: Mangum(app)
-│   └── app/
-│       ├── main.py                 # FastAPI app + CORS middleware
-│       └── routes/
-│           ├── health.py           # GET /health — public (no authorizer)
-│           └── items.py            # GET /api/v1/items, /api/v1/items/{id} — protected
-│
-└── frontend/                       # Next.js 14 (SSR)
-    ├── package.json
-    ├── next.config.mjs             # reactStrictMode only — SSR default
-    ├── tsconfig.json
-    ├── tailwind.config.ts
-    ├── postcss.config.mjs
-    ├── amplify.yml                 # GitHub-connected Amplify build (SSR)
-    ├── .env.local.example
-    └── src/
-        ├── middleware.ts                         # protects routes — reads Cognito cookies
-        ├── app/
-        │   ├── layout.tsx                        # Providers + ConfigureAmplify
-        │   ├── globals.css
-        │   ├── page.tsx                          # public — Authenticator UI
-        │   └── (protected)/dashboard/page.tsx   # protected — calls FastAPI via axios
-        ├── components/
-        │   ├── ConfigureAmplify.tsx              # Amplify.configure({ ssr: true }) — tokens in cookies
-        │   └── Providers.tsx                     # Authenticator.Provider wrapper
-        └── lib/
-            ├── amplify-config.ts                 # reads NEXT_PUBLIC_* env vars
-            └── api-client.ts                     # axios instance — auto-attaches Bearer token
+├── pyproject.toml          # Python deps (uv) — FastAPI, Mangum, Pydantic
+├── handler.py              # Lambda entry: Mangum(app)
+├── app/
+│   ├── main.py             # FastAPI app + CORS middleware
+│   └── routes/
+│       ├── health.py       # GET /health — public (no authorizer)
+│       └── items.py        # GET /api/v1/items, /api/v1/items/{id} — protected
+├── package.json            # CDK deps (npm)
+├── tsconfig.json
+├── cdk.json                # CDK entry: bin/app.ts via ts-node
+├── bin/
+│   └── app.ts              # CDK app — instantiates MainStack
+└── lib/
+    └── stack.ts            # All AWS resources defined here
 ```
 
 ---
@@ -95,105 +56,69 @@ AWS Lambda (FastAPI via Mangum)
 ## Commands
 
 ```bash
-# First-time setup
-make install                  # npm install (infra + frontend) + uv sync (backend)
+# Install deps
+npm install          # CDK
+uv sync              # FastAPI (local dev only)
 
-# Deploy backend (Cognito + API GW + Lambda) → also writes frontend/.env.local
-make deploy
+# Deploy backend
+npx cdk deploy --require-approval never
 
-# Deploy frontend to Amplify (creates app on first run, reuses on subsequent runs)
-make deploy-frontend
+# Destroy
+npx cdk destroy
 
-# Redeploy backend only after changes
-cd infra && npx cdk deploy --require-approval never
-
-# Redeploy frontend only after changes
-# Option A — manual zip upload (no GitHub)
-make deploy-frontend
-# Option B — GitHub-connected Amplify (push to main → Amplify rebuilds automatically)
-git push origin main
-
-# Print backend stack outputs
-make outputs
-
-# Tear EVERYTHING down — Amplify app + CDK stack
-make destroy
+# Print stack outputs
+aws cloudformation describe-stacks \
+  --stack-name fastapi-cdk-starter \
+  --query "Stacks[0].Outputs" \
+  --output table
 
 # Local development
-make dev-backend              # uvicorn on :8000
-make dev-frontend             # next dev on :3000 (uses .env.local → real AWS)
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
 ---
 
-## CDK Stack (infra/lib/stack.ts)
+## CDK Stack (lib/stack.ts)
 
-All AWS resources are defined in a single TypeScript file. CDK handles:
-- **Lambda bundling** — spins up a Docker container, runs `pip install`, zips output.
-  No separate build step. `cdk deploy` does everything.
-- **Typed references** — `userPool.userPoolId`, `api.url` instead of `!Ref`/`!Sub` strings.
-- **RemovalPolicy.DESTROY** on Cognito User Pool — equivalent to `DeletionPolicy: Delete` in SAM.
+All AWS resources in one TypeScript file. CDK handles:
+- **Lambda bundling** — spins up Docker, runs `pip install .` (reads pyproject.toml), copies `handler.py` and `app/` into the zip. No requirements.txt needed.
+- **Typed references** — `userPool.userPoolId`, `api.url` instead of string interpolation.
+- **RemovalPolicy.DESTROY** on Cognito User Pool — cleans up on `cdk destroy`.
 
 ```
 cdk deploy
   │
   ├── ts-node compiles stack.ts
   ├── CDK synthesizes CloudFormation template → cdk.out/
-  ├── Docker bundles Lambda (pip install + source copy)
+  ├── Docker bundles Lambda (pip install . + cp handler.py app/)
   ├── Uploads zip to CDKToolkit S3 bucket
   └── CloudFormation creates/updates the stack
 ```
 
-**Bootstrap requirement:** First-ever CDK deploy to an account/region needs:
+**Bootstrap requirement:** First-ever CDK deploy needs:
 ```bash
-cd infra && npx cdk bootstrap aws://<account-id>/us-east-1
+npx cdk bootstrap aws://<account-id>/us-east-1
 ```
-This creates the `CDKToolkit` stack (S3 bucket + IAM roles). One-time per account/region.
+One-time per account/region. Creates the `CDKToolkit` stack.
 
 ---
 
-## How the Auth Flow Works
+## Stack Outputs → Frontend Variables
 
-1. User visits `/` → `<Authenticator>` renders sign-in/sign-up UI (no custom code).
-2. On success, Amplify stores tokens in **cookies** (`{ ssr: true }` in `ConfigureAmplify.tsx`).
-3. `RedirectWhenSignedIn` detects `user` and calls `router.replace('/dashboard')`.
-4. Browser navigates to `/dashboard` → `middleware.ts` runs first, reads Cognito cookies,
-   calls `fetchAuthSession()` server-side. No valid session → redirect to `/`.
-5. Dashboard calls `apiClient.get('/api/v1/items')` → axios request interceptor calls
-   `fetchAuthSession()` to get the current access token, attaches it as
-   `Authorization: Bearer <token>`.
-6. API Gateway checks the JWT against Cognito's public keys.
-   Invalid/missing token → `401` before Lambda is invoked.
-   Valid token → Lambda runs, FastAPI handles the request.
-7. When the access token expires, `fetchAuthSession()` automatically uses the
-   refresh token. FastAPI never sees expired tokens.
+After `cdk deploy`, copy these outputs into your frontend:
+
+| CDK Output | Frontend Env Var |
+|---|---|
+| `UserPoolId` | `NEXT_PUBLIC_USER_POOL_ID` |
+| `UserPoolClientId` | `NEXT_PUBLIC_USER_POOL_CLIENT_ID` |
+| `ApiUrl` | `NEXT_PUBLIC_API_URL` |
+| `Region` | `NEXT_PUBLIC_AWS_REGION` |
 
 ---
 
-## Amplify Deployment
+## Adding a New Protected Route
 
-Two deployment modes are supported:
-
-**Option A — GitHub-connected (recommended)**
-Connect the repo in Amplify Console → Amplify rebuilds on every push to `main`.
-`NEXT_PUBLIC_*` env vars must be set in **Amplify Console → App settings → Environment variables**
-(they are not in `.env.local` which is gitignored).
-
-**Option B — Manual zip upload (no GitHub)**
-`scripts/deploy-frontend.sh` manages the Amplify app:
-- **First run** — creates the Amplify app, branch, and SPA rewrite rule.
-  Saves the app ID to `.amplify-app-id` (gitignored).
-- **Subsequent runs** — reads the ID from `.amplify-app-id` and redeploys.
-- **Destroy** — `make destroy` reads `.amplify-app-id`, deletes the app, removes the file.
-
-For manual deployments, `NEXT_PUBLIC_*` env vars are read from `frontend/.env.local`
-(written by `scripts/post-deploy.sh`) and baked into the JS bundle at build time.
-
----
-
-## Adding a New Protected Backend Route
-
-1. Create `backend/app/routes/myroute.py`:
+1. Create `app/routes/myroute.py`:
    ```python
    from fastapi import APIRouter
    router = APIRouter(tags=["myroute"])
@@ -202,78 +127,42 @@ For manual deployments, `NEXT_PUBLIC_*` env vars are read from `frontend/.env.lo
    async def get_resource():
        return {"data": "..."}
    ```
-2. Register in `backend/app/main.py`:
+2. Register in `app/main.py`:
    ```python
    from app.routes import myroute
    app.include_router(myroute.router, prefix="/api/v1")
    ```
-3. `cd infra && npx cdk deploy --require-approval never`
+3. `npx cdk deploy --require-approval never`
 
-All `/{proxy+}` routes are automatically protected by the JWT Authorizer in `stack.ts`.
+All `/{proxy+}` routes are automatically protected by the JWT Authorizer.
 
 ---
 
-## Adding a New Protected Frontend Page
+## Adding a Public Route
 
-1. Create the page under `src/app/(protected)/mypage/page.tsx` — no auth guard needed in the component, middleware handles it.
-
-2. Add the path to the `matcher` in `src/middleware.ts`:
+In `lib/stack.ts`, add an explicit route without an authorizer before the catch-all:
 ```typescript
-export const config = {
-  matcher: ['/dashboard/:path*', '/mypage/:path*'],
-};
+api.addRoutes({ path: '/products', methods: [HttpMethod.GET], integration });
 ```
-
-3. Use `apiClient` for any backend calls:
-```tsx
-'use client';
-import apiClient from '@/lib/api-client';
-
-export default function MyPage() {
-  // apiClient automatically attaches the Bearer token
-  const res = await apiClient.get('/api/v1/my-resource');
-}
-```
-
-After changes: push to GitHub (Option A) or `make deploy-frontend` (Option B).
 
 ---
 
 ## Known CORS Gotcha (fixed in stack.ts)
 
-**Symptom:** "Failed to fetch" / CORS error in browser console.
-
 **Root cause:** `HttpMethod.ANY` on `/{proxy+}` catches OPTIONS requests and applies
 the JWT Authorizer → OPTIONS returns `401` → browser blocks the request.
 
-**Fix (in stack.ts):** Explicit `OPTIONS /{proxy+}` route without an authorizer,
-declared before the `ANY` route. More specific method routes beat `ANY` in API Gateway v2.
-
-```typescript
-// OPTIONS — no authorizer (CORS preflight)
-api.addRoutes({ path: '/{proxy+}', methods: [HttpMethod.OPTIONS], integration });
-
-// ALL other methods — JWT required
-api.addRoutes({ path: '/{proxy+}', methods: [HttpMethod.ANY], integration, authorizer });
-```
+**Fix:** Explicit `OPTIONS /{proxy+}` route without an authorizer, declared before `ANY`.
+More specific method routes beat `ANY` in API Gateway v2.
 
 ---
 
 ## Key Constraints
 
-- **`next.config.mjs` not `.ts`** — Next.js 14.2 does not support TypeScript config files.
-- **`{ ssr: true }` in `ConfigureAmplify.tsx`** — required for middleware-based route protection.
-  Stores tokens in cookies instead of `localStorage`. Do not remove it.
-- **`middleware.ts` matcher must be updated** for every new protected route — middleware only
-  runs on paths listed in `matcher`. Forgetting this leaves a route unprotected.
-- **`backend/requirements.txt` is not committed** — CDK bundles deps via Docker at deploy time.
-  If you need it locally (e.g. IDE autocomplete): `cd backend && uv export --no-hashes --no-dev -o requirements.txt`
-- **`frontend/.env.local` is generated** by `scripts/post-deploy.sh` — never commit it.
-  For GitHub-connected Amplify, set env vars in Amplify Console instead.
-- **`.amplify-app-id` is generated** by `scripts/deploy-frontend.sh` — never commit it.
 - **No auth logic in FastAPI** — do not add JWT decode, session middleware, or login endpoints.
   The contract: if Lambda runs, the request is authenticated.
-- **CDKToolkit stack** — required one-time bootstrap per account/region. Not part of the app;
-  do not delete it between deployments.
-- **`make destroy` removes both** — reads `.amplify-app-id` for the Amplify app,
-  then runs `cdk destroy` for the backend stack.
+- **Lambda bundling uses Docker** — `cdk deploy` requires Docker running locally.
+  Bundling installs from `pyproject.toml` and copies only `handler.py` + `app/`.
+- **CDKToolkit stack** — required one-time bootstrap per account/region. Do not delete between deploys.
+- **`cdk.out/` is generated** — never commit it.
+- **No `__init__.py` files** — Python 3.13 supports implicit namespace packages. `app/` and `app/routes/` are recognized as packages without them.

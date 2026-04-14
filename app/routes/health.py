@@ -1,5 +1,5 @@
 """
-Health check — public endpoint (Authorizer: NONE in template.yaml).
+Health check — public endpoint (no JWT authorizer).
 
 Used by load balancers, monitoring, and quick smoke-tests.
 """

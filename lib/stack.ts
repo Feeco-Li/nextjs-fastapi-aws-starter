@@ -41,8 +41,9 @@ export class MainStack extends cdk.Stack {
 
     // ── Lambda — FastAPI via Mangum ───────────────────────────────────────────
     //
-    // CDK bundles the Lambda package using Docker (same pip install as SAM build).
-    // Run `cdk deploy` instead of `sam build && sam deploy` — no separate build step.
+    // CDK bundles the Lambda package using Docker.
+    // deps are installed from pyproject.toml via `pip install .`
+    // Only handler.py and app/ are copied into the zip — no node_modules, no CDK files.
     //
     const apiFn = new lambda.Function(this, 'ApiFunction', {
       functionName: `${id}-api`,
@@ -50,14 +51,15 @@ export class MainStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       architecture: lambda.Architecture.ARM_64,
       handler: 'handler.handler',
-      code: lambda.Code.fromAsset('../backend', {
+      code: lambda.Code.fromAsset('.', {
         bundling: {
           image: lambda.Runtime.PYTHON_3_13.bundlingImage,
           platform: 'linux/arm64',
           command: [
             'bash', '-c',
-            // installs deps into /asset-output, then copies source alongside them
-            'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
+            // Install deps from pyproject.toml, then copy only Python source files.
+            // Explicit copy avoids bundling node_modules, cdk.out, etc.
+            'pip install . -t /asset-output && cp -r handler.py app /asset-output',
           ],
         },
       }),
@@ -69,10 +71,6 @@ export class MainStack extends cdk.Stack {
     });
 
     // ── HTTP API v2 ───────────────────────────────────────────────────────────
-    //
-    // corsPreflight configures CORS at the API level — cleaner than SAM's
-    // CorsConfiguration + manual OPTIONS route workaround.
-    //
     const api = new apigwv2.HttpApi(this, 'ApiGateway', {
       apiName: `${id}-api`,
       description: 'FastAPI backend — JWT auth delegated to API Gateway',
@@ -102,7 +100,7 @@ export class MainStack extends cdk.Stack {
       integration,
     });
 
-    // CORS preflight — OPTIONS must bypass JWT authorizer (same requirement as SAM)
+    // CORS preflight — OPTIONS must bypass JWT authorizer
     api.addRoutes({
       path: '/{proxy+}',
       methods: [apigwv2.HttpMethod.OPTIONS],
@@ -118,23 +116,24 @@ export class MainStack extends cdk.Stack {
     });
 
     // ── Outputs ───────────────────────────────────────────────────────────────
+    // Copy these values into your frontend's environment variables.
     new cdk.CfnOutput(this, 'UserPoolId', {
-      description: 'Cognito User Pool ID',
+      description: 'Cognito User Pool ID  →  NEXT_PUBLIC_USER_POOL_ID',
       value: userPool.userPoolId,
     });
 
     new cdk.CfnOutput(this, 'UserPoolClientId', {
-      description: 'Cognito App Client ID (no secret)',
+      description: 'Cognito App Client ID  →  NEXT_PUBLIC_USER_POOL_CLIENT_ID',
       value: userPoolClient.userPoolClientId,
     });
 
     new cdk.CfnOutput(this, 'ApiUrl', {
-      description: 'API Gateway base URL',
+      description: 'API Gateway base URL  →  NEXT_PUBLIC_API_URL',
       value: api.url ?? '',
     });
 
     new cdk.CfnOutput(this, 'Region', {
-      description: 'Deployment region',
+      description: 'Deployment region  →  NEXT_PUBLIC_AWS_REGION',
       value: this.region,
     });
   }

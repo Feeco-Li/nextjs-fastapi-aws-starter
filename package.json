@@ -1,14 +1,14 @@
 {
-  "name": "infra",
+  "name": "fastapi-cdk-starter",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build":  "tsc",
-    "watch":  "tsc -w",
-    "synth":  "cdk synth",
-    "deploy": "cdk deploy",
+    "build":   "tsc",
+    "watch":   "tsc -w",
+    "synth":   "cdk synth",
+    "deploy":  "cdk deploy",
     "destroy": "cdk destroy",
-    "diff":   "cdk diff"
+    "diff":    "cdk diff"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.150.0",
@@ -18,7 +18,7 @@
     "@aws-cdk/aws-apigatewayv2-integrations-alpha": "^2.150.0-alpha.0"
   },
   "devDependencies": {
-    "aws-cdk":   "^2.150.0",
+    "aws-cdk":    "^2.150.0",
     "typescript": "^5",
     "@types/node": "^20",
     "ts-node":    "^10"

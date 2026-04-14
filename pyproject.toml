@@ -1,5 +1,5 @@
 [project]
-name = "backend"
+name = "fastapi-cdk-starter"
 version = "0.1.0"
 description = "FastAPI backend — stateless, auth delegated to API Gateway"
 requires-python = ">=3.13"
