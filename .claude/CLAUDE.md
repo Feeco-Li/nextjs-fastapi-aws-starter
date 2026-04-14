@@ -60,25 +60,15 @@ Amazon DynamoDB
 
 ## Commands
 
+All commands are in the `Makefile` — language-agnostic, no extra runtime required.
+Prefer `make` over `npm run` or raw CLI commands in this project (mixed Python + TypeScript).
+
 ```bash
-# Install deps
-npm install          # CDK
-uv sync              # FastAPI (local dev only)
-
-# Deploy
-npx cdk deploy --require-approval never
-
-# Destroy all resources
-npx cdk destroy
-
-# Print stack outputs
-aws cloudformation describe-stacks \
-  --stack-name fastapi-cdk-starter \
-  --query "Stacks[0].Outputs" \
-  --output table
-
-# Local development
-uv run uvicorn app.main:app --reload --port 8000
+make install   # npm install + uv sync
+make dev       # uvicorn on :8000
+make deploy    # npx cdk deploy --require-approval never
+make destroy   # npx cdk destroy
+make outputs   # print Cognito + API Gateway values from CloudFormation
 ```
 
 ---

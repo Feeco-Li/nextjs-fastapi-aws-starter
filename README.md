@@ -109,6 +109,9 @@ make destroy   # tear down all AWS resources
 make outputs   # print stack outputs (Cognito + API Gateway values)
 ```
 
+> `Makefile` is used instead of `package.json` scripts because this is a mixed Python + TypeScript project.
+> `make` is language-agnostic, requires no runtime, and is pre-installed on macOS and Linux.
+
 ---
 
 ## Customisation
