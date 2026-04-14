@@ -26,7 +26,7 @@ export class ApiConstruct extends Construct {
       functionName: `${stackName}-api`,
       description: 'FastAPI — stateless, auth handled upstream by API Gateway',
       runtime: lambda.Runtime.PYTHON_3_13,
-      architecture: lambda.Architecture.ARM_64,
+      architecture: lambda.Architecture.X86_64,
       handler: 'handler.handler',
       code: lambda.Code.fromAsset('.', {
         exclude: [
@@ -37,7 +37,7 @@ export class ApiConstruct extends Construct {
         ],
         bundling: {
           image: lambda.Runtime.PYTHON_3_13.bundlingImage,
-          platform: 'linux/arm64',
+          platform: 'linux/amd64',
           command: [
             'bash', '-c',
             'pip install . -t /asset-output && cp -r handler.py app /asset-output',
