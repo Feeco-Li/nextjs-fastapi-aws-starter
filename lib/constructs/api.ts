@@ -29,6 +29,12 @@ export class ApiConstruct extends Construct {
       architecture: lambda.Architecture.ARM_64,
       handler: 'handler.handler',
       code: lambda.Code.fromAsset('.', {
+        exclude: [
+          'node_modules', 'cdk.out', 'dist',  // Node / CDK artifacts
+          '.venv', '__pycache__', '*.pyc',     // Python artifacts
+          'bin', 'lib',                         // CDK source
+          '.git', '.gitignore',
+        ],
         bundling: {
           image: lambda.Runtime.PYTHON_3_13.bundlingImage,
           platform: 'linux/arm64',
