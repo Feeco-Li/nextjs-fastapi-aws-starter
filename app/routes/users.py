@@ -1,7 +1,7 @@
 from uuid import uuid4, UUID
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,14 @@ class UserResponse(BaseModel):
     display_name: str
     created_at: date
     updated_at: date
+
+
+"""
+TASK 2 — Upsert current user on first request
+  Add POST /users/me. Extract the Cognito `sub` claim from the Authorization Bearer
+  token (decode without verification — API Gateway already validated it). Upsert a row
+  in `users` using the sub as `id` and the `email` claim as email. Return the user.
+"""
 
 
 @router.post("/users", response_model=UserResponse, status_code=201)
