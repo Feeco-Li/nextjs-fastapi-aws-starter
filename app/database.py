@@ -1,7 +1,7 @@
 import boto3
 import json
 from functools import lru_cache
-from sqlalchemy import create_engine, Column, String
+from sqlalchemy import create_engine, Column, String, UUID, Date
 from sqlalchemy.orm import DeclarativeBase
 from pydantic_settings import BaseSettings
 
@@ -48,6 +48,24 @@ class ItemModel(Base):
     id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     description = Column(String, nullable=False)
+
+
+"""
+TASK 1 — User profile model
+  Create a `users` table with columns: id (UUID, PK), email (unique), display_name,
+  created_at, updated_at. Add a UserModel in database.py, register it with init_db.
+  No routes yet — just confirm the table is created on startup.
+"""
+
+
+class UserModel(Base):
+    __tablename__ = "users_py"
+
+    id = Column(UUID, primary_key=True)
+    email = Column(String, unique=True)
+    display_name = Column(String)
+    created_at = Column(Date)
+    updated_at = Column(Date)
 
 
 def init_db() -> None:
