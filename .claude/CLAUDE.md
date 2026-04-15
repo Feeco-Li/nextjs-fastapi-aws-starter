@@ -1,6 +1,6 @@
 # fastapi-cdk-starter
 
-FastAPI + Amazon Cognito + DynamoDB on AWS, deployed via AWS CDK.
+FastAPI + Amazon Cognito + Aurora PostgreSQL on AWS, deployed via AWS CDK.
 Frontend is deployed separately (e.g. Next.js on Amplify, configured manually with CDK outputs).
 
 ---
@@ -16,8 +16,10 @@ Amazon API Gateway (HTTP API v2)
   ▼
 AWS Lambda (FastAPI via Mangum)
   │  stateless, zero auth logic
+  │  inside VPC — reads Aurora credentials from Secrets Manager
   ▼
-Amazon DynamoDB
+Aurora Serverless v2 (PostgreSQL 16)
+  └── private VPC subnet — no public endpoint
 ```
 
 | Layer | Technology | Key decision |
@@ -25,7 +27,8 @@ Amazon DynamoDB
 | Auth provider | Amazon Cognito User Pool | email/password, SRP flow, no app-client secret |
 | API auth | API Gateway JWT Authorizer | Cognito public keys, validated before Lambda |
 | Backend | FastAPI + Mangum | stateless, no sessions, no login endpoints |
-| Database | DynamoDB | PAY_PER_REQUEST billing, table name injected via env var |
+| Database | Aurora Serverless v2 (PostgreSQL 16) | scales 0.5-4 ACU, credentials in Secrets Manager |
+| Networking | VPC (isolated subnets) + Secrets Manager endpoint | Lambda reaches Aurora + Secrets Manager without internet |
 | Package manager | uv | Python deps via `pyproject.toml` |
 | IaC | **AWS CDK** (TypeScript) | type-safe, single `cdk deploy` + `cdk destroy` |
 | Runtime | Python 3.13 / x86_64 | compatible with standard x86 dev machines |
@@ -36,10 +39,11 @@ Amazon DynamoDB
 
 ```
 .
-├── pyproject.toml              # Python deps (uv) — FastAPI, Mangum, Pydantic, boto3
+├── pyproject.toml              # Python deps (uv) — FastAPI, Mangum, Pydantic, boto3, SQLAlchemy
 ├── handler.py                  # Lambda entry: Mangum(app)
 ├── app/
-│   ├── main.py                 # FastAPI app + CORS middleware
+│   ├── main.py                 # FastAPI app + CORS middleware + lifespan (init_db)
+│   ├── database.py             # SQLAlchemy engine, models, init_db
 │   └── routes/
 │       ├── health.py           # GET /health — public (no authorizer)
 │       └── items.py            # CRUD /api/v1/items — protected (JWT required)
@@ -51,9 +55,10 @@ Amazon DynamoDB
 └── lib/
     ├── stack.ts                # Composes constructs + CfnOutputs
     └── constructs/
+        ├── network.ts          # VPC + Secrets Manager VPC endpoint
         ├── auth.ts             # Cognito User Pool + Client
-        ├── database.ts         # DynamoDB tables
-        └── api.ts              # Lambda + API Gateway + JWT Authorizer
+        ├── database.ts         # Aurora Serverless v2 cluster
+        └── api.ts              # Lambda (in VPC) + API Gateway + JWT Authorizer
 ```
 
 ---
@@ -75,18 +80,22 @@ make outputs   # print CloudFormation outputs + write .env (run after deploy)
 
 ## CDK Constructs (lib/constructs/)
 
-The stack is split into three constructs. Each owns one slice of infrastructure
+The stack is split into four constructs. Each owns one slice of infrastructure
 and exposes what others need via public properties.
 
 ```
 stack.ts
+  ├── NetworkConstruct  → vpc
   ├── AuthConstruct     → userPool, userPoolClient
-  ├── DatabaseConstruct → itemsTable (+ future tables)
+  ├── DatabaseConstruct → cluster, securityGroup
+  │     takes: { vpc }
+  │     creates: Aurora Serverless v2 cluster + security group
+  │     stores: credentials auto-generated in Secrets Manager
   └── ApiConstruct      → apiUrl
-        takes: { auth, database }
-        creates: Lambda + API Gateway
-        grants: table.grantReadWriteData(apiFn) per table
-        injects: TABLE_NAME env vars into Lambda
+        takes: { auth, database, vpc }
+        creates: Lambda (in VPC) + API Gateway
+        grants: cluster.secret.grantRead(apiFn)
+        injects: DB_SECRET_ARN, DB_HOST, DB_PORT, DB_NAME env vars
 ```
 
 **Deploy flow:**
@@ -107,9 +116,28 @@ One-time per account/region. Creates the `CDKToolkit` stack.
 
 ---
 
+## Database Connection
+
+**On Lambda (automatic):**
+- `DATABASE_URL` is not set → falls back to Secrets Manager
+- Lambda reads Aurora credentials via `DB_SECRET_ARN` env var (injected by CDK)
+- Lambda is inside the VPC → can reach Aurora directly
+- No manual configuration needed
+
+**Local dev:**
+- Aurora has no public endpoint — cannot connect from outside the VPC
+- Set `DATABASE_URL` in `.env` pointing to a local PostgreSQL or Neon
+- `make dev` auto-loads `.env`
+
+```
+DATABASE_URL=postgresql+psycopg2://user:password@localhost:5432/appdb
+```
+
+---
+
 ## Stack Outputs → Frontend Variables
 
-After `cdk deploy`, copy these outputs into your frontend:
+After `make deploy`, run `make outputs` to print values and write `.env`:
 
 | CDK Output | Frontend Env Var |
 |---|---|
@@ -118,48 +146,45 @@ After `cdk deploy`, copy these outputs into your frontend:
 | `ApiUrl` | `NEXT_PUBLIC_API_URL` |
 | `Region` | `NEXT_PUBLIC_AWS_REGION` |
 
+`DATABASE_URL` is not in outputs — set it manually in `.env` for local dev.
+
 ---
 
-## Adding a New DynamoDB Table
+## Adding a New PostgreSQL Model
 
-**1. `lib/constructs/database.ts`** — declare and create the table:
-```typescript
-readonly ordersTable: dynamodb.Table;
-
-this.ordersTable = new dynamodb.Table(this, 'OrdersTable', {
-  tableName: `${stackName}-orders`,
-  partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-  billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-  removalPolicy: cdk.RemovalPolicy.DESTROY,
-});
-```
-
-**2. `lib/constructs/api.ts`** — inject env var and grant access:
-```typescript
-environment: {
-  ORDERS_TABLE: database.ordersTable.tableName,
-},
-// ...
-database.ordersTable.grantReadWriteData(apiFn);
-```
-
-**3. `app/routes/orders.py`** — use the table:
+**1. `app/database.py`** — add the SQLAlchemy model:
 ```python
-import boto3
-from pydantic_settings import BaseSettings
+class OrderModel(Base):
+    __tablename__ = "orders"
 
-class Settings(BaseSettings):
-    orders_table: str
-    model_config = {"env_file": ".env", "extra": "ignore"}
-
-table = boto3.resource("dynamodb").Table(Settings().orders_table)
+    id          = Column(String, primary_key=True)
+    item_id     = Column(String, nullable=False)
+    quantity    = Column(Integer, nullable=False)
 ```
 
-**4. Register in `app/main.py`**, then:
-```bash
-make deploy    # creates the table, existing tables untouched
-make outputs   # rewrites .env with the new table name
+**2. `app/routes/orders.py`** — new route file:
+```python
+from fastapi import APIRouter
+from sqlalchemy.orm import Session
+from app.database import get_engine, OrderModel
+
+router = APIRouter(tags=["orders"])
+
+@router.get("/orders")
+def list_orders():
+    with Session(get_engine()) as session:
+        return session.query(OrderModel).all()
 ```
+
+**3. Register in `app/main.py`**:
+```python
+from app.routes import orders
+app.include_router(orders.router, prefix="/api/v1")
+```
+
+**4. `make deploy`** — `init_db()` runs on Lambda startup and creates the new table automatically.
+
+No CDK changes needed — all models share the same Aurora cluster.
 
 ---
 
@@ -171,7 +196,7 @@ make outputs   # rewrites .env with the new table name
    router = APIRouter(tags=["myroute"])
 
    @router.get("/my-resource")
-   async def get_resource():
+   def get_resource():
        return {"data": "..."}
    ```
 2. Register in `app/main.py`:
@@ -210,8 +235,11 @@ More specific method routes beat `ANY` in API Gateway v2.
   The contract: if Lambda runs, the request is authenticated.
 - **Lambda bundling uses Docker** — `cdk deploy` requires Docker running locally.
   Bundling installs from `pyproject.toml` and copies only `handler.py` + `app/`.
-- **DynamoDB table name** is injected as a Lambda env var by CDK — never hardcode it.
+- **Aurora is private** — no public endpoint. Local dev needs a separate `DATABASE_URL`.
+- **Credentials in Secrets Manager** — never hardcode DB credentials. CDK manages them automatically.
+- **`init_db()` runs on every cold start** — uses SQLAlchemy `create_all` (safe to run repeatedly).
 - **CDKToolkit stack** — required one-time bootstrap per account/region. Do not delete between deploys.
 - **`cdk.out/` is generated** — never commit it.
 - **No `__init__.py` files** — Python 3.13 supports implicit namespace packages.
-- **boto3 is bundled** in the Lambda zip (listed in `pyproject.toml` dependencies) for version consistency.
+- **boto3 is bundled** in the Lambda zip (listed in `pyproject.toml` dependencies) — used for Secrets Manager.
+- **Security group descriptions** must be ASCII only — AWS rejects non-ASCII characters.

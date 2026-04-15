@@ -1,6 +1,6 @@
 # fastapi-cdk-starter
 
-A production-ready AWS backend starter — FastAPI + Amazon Cognito + DynamoDB, deployed with AWS CDK.
+A production-ready AWS backend starter — FastAPI + Amazon Cognito + Aurora PostgreSQL, deployed with AWS CDK.
 
 ## Stack
 
@@ -9,7 +9,8 @@ A production-ready AWS backend starter — FastAPI + Amazon Cognito + DynamoDB, 
 | Auth | Amazon Cognito User Pool |
 | Backend | FastAPI on Lambda (x86_64, Python 3.13) via Mangum |
 | API | HTTP API Gateway v2 — JWT Authorizer (Cognito) |
-| Database | Amazon DynamoDB |
+| Database | Aurora Serverless v2 (PostgreSQL 16) |
+| Networking | VPC with isolated subnets + Secrets Manager VPC endpoint |
 | Infrastructure | AWS CDK (TypeScript) |
 | Package manager | uv (Python), npm (Node) |
 
@@ -20,7 +21,8 @@ A production-ready AWS backend starter — FastAPI + Amazon Cognito + DynamoDB, 
 ├── pyproject.toml              # Python deps (uv)
 ├── handler.py                  # Lambda entry: Mangum(app)
 ├── app/
-│   ├── main.py                 # FastAPI app + CORS middleware
+│   ├── main.py                 # FastAPI app + CORS + lifespan (init_db)
+│   ├── database.py             # SQLAlchemy engine, models, init_db
 │   └── routes/
 │       ├── health.py           # GET /health — public
 │       └── items.py            # CRUD /api/v1/items — protected (JWT required)
@@ -32,9 +34,10 @@ A production-ready AWS backend starter — FastAPI + Amazon Cognito + DynamoDB, 
 └── lib/
     ├── stack.ts                # Composes constructs + outputs
     └── constructs/
+        ├── network.ts          # VPC + Secrets Manager endpoint
         ├── auth.ts             # Cognito User Pool + Client
-        ├── database.ts         # DynamoDB tables
-        └── api.ts              # Lambda + API Gateway + JWT Authorizer
+        ├── database.ts         # Aurora Serverless v2 cluster
+        └── api.ts              # Lambda (in VPC) + API Gateway + JWT Authorizer
 ```
 
 ## Prerequisites
@@ -67,13 +70,13 @@ make install
 make deploy
 ```
 
-After deploy, run `make outputs` to print stack values and write `.env` for local development:
+### 4. Get outputs
 
 ```bash
 make outputs
 ```
 
-Copy the printed values into your frontend's environment variables:
+Prints stack values and writes `.env`. Copy the printed values into your frontend:
 
 ```
 UserPoolId        →  NEXT_PUBLIC_USER_POOL_ID
@@ -92,8 +95,14 @@ make dev
 
 Swagger UI: http://localhost:8000/docs
 
-`make dev` auto-loads `.env` — run `make outputs` once after deploying to generate it.
-AWS credentials must be configured (`aws configure`) so boto3 can reach DynamoDB.
+`make dev` auto-loads `.env`. However, Aurora has **no public endpoint** — it lives inside a private VPC. For local dev you need a separate `DATABASE_URL` pointing to a local PostgreSQL or [Neon](https://neon.tech):
+
+```bash
+# add to .env
+DATABASE_URL=postgresql+psycopg2://user:password@localhost:5432/appdb
+```
+
+On Lambda, `DATABASE_URL` is not set — Lambda automatically reads credentials from Secrets Manager and connects to Aurora via the VPC.
 
 ---
 
@@ -109,7 +118,7 @@ make destroy
 
 ```bash
 make install   # install all dependencies (npm + uv)
-make dev       # run FastAPI locally on :8000
+make dev       # run FastAPI locally on :8000 (auto-loads .env)
 make deploy    # deploy / redeploy CDK stack
 make destroy   # tear down all AWS resources
 make outputs   # print stack outputs + write .env for local dev
@@ -122,55 +131,40 @@ make outputs   # print stack outputs + write .env for local dev
 
 ## Customisation
 
-### Add a new DynamoDB table
+### Add a new PostgreSQL model
 
-1. **`lib/constructs/database.ts`** — add the table (uncomment the placeholder):
-   ```typescript
-   readonly ordersTable: dynamodb.Table;
+All models share the same Aurora cluster — no CDK changes needed.
 
-   this.ordersTable = new dynamodb.Table(this, 'OrdersTable', {
-     tableName: `${stackName}-orders`,
-     partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
-     billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-     removalPolicy: cdk.RemovalPolicy.DESTROY,
-   });
-   ```
-
-2. **`lib/constructs/api.ts`** — inject env var and grant access (uncomment the placeholders):
-   ```typescript
-   environment: {
-     ORDERS_TABLE: database.ordersTable.tableName,
-   },
-   // ...
-   database.ordersTable.grantReadWriteData(apiFn);
-   ```
-
-3. **`app/routes/orders.py`** — new route file:
+1. **`app/database.py`** — add the SQLAlchemy model:
    ```python
-   import boto3
-   from fastapi import APIRouter
-   from pydantic_settings import BaseSettings
+   class OrderModel(Base):
+       __tablename__ = "orders"
 
-   class Settings(BaseSettings):
-       orders_table: str
-       model_config = {"env_file": ".env", "extra": "ignore"}
+       id       = Column(String, primary_key=True)
+       item_id  = Column(String, nullable=False)
+   ```
+
+2. **`app/routes/orders.py`** — new route file:
+   ```python
+   from fastapi import APIRouter
+   from sqlalchemy.orm import Session
+   from app.database import get_engine, OrderModel
 
    router = APIRouter(tags=["orders"])
-   table = boto3.resource("dynamodb").Table(Settings().orders_table)
 
    @router.get("/orders")
-   async def list_orders():
-       return table.scan()["Items"]
+   def list_orders():
+       with Session(get_engine()) as session:
+           return session.query(OrderModel).all()
    ```
 
-4. **`app/main.py`** — register the router:
+3. **`app/main.py`** — register the router:
    ```python
    from app.routes import orders
    app.include_router(orders.router, prefix="/api/v1")
    ```
 
-5. `make deploy` — creates the table, existing tables are untouched
-6. `make outputs` — rewrites `.env` with the new table name included
+4. `make deploy` — `init_db()` runs on Lambda startup and creates the new table automatically.
 
 ### Add a protected API route
 
@@ -180,7 +174,7 @@ make outputs   # print stack outputs + write .env for local dev
    router = APIRouter(tags=["myroute"])
 
    @router.get("/my-resource")
-   async def get_resource():
+   def get_resource():
        return {"data": "..."}
    ```
 2. Register in `app/main.py`:
