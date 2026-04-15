@@ -20,7 +20,7 @@ export class DatabaseConstruct extends Construct {
     // Aurora's security group — inbound rule added by ApiConstruct (Lambda → 5432)
     this.securityGroup = new ec2.SecurityGroup(this, 'SecurityGroup', {
       vpc,
-      description: 'Aurora PostgreSQL — allow inbound from Lambda',
+      description: 'Aurora PostgreSQL - allow inbound from Lambda',
       allowAllOutbound: false,
     });
 

@@ -26,14 +26,14 @@ export class ApiConstruct extends Construct {
     // ── Lambda security group ─────────────────────────────────────────────────
     const lambdaSg = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
       vpc,
-      description: 'Lambda API function — outbound to Aurora on 5432',
+      description: 'Lambda API function - outbound to Aurora on 5432',
     });
 
     // Allow Lambda to connect to Aurora PostgreSQL
     database.securityGroup.addIngressRule(
       lambdaSg,
       ec2.Port.tcp(5432),
-      'Lambda → Aurora PostgreSQL',
+      'Lambda to Aurora PostgreSQL',
     );
 
     // ── Lambda ────────────────────────────────────────────────────────────────
