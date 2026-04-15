@@ -46,29 +46,6 @@ class Item(BaseModel):
 # async def list_items() -> list[Item]:
 #     return _ITEMS
 # 
-# 
-# @router.get("/items/{item_id}", response_model=Item)
-# async def get_item(item_id: str) -> Item:
-#     for item in _ITEMS:
-#         if item.id == item_id:
-#             return item
-#     raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
-# 
-# 
-# @router.post("/items", response_model=Item, status_code=201)
-# async def create_item(item: Item) -> Item:
-#     _ITEMS.append(item)
-#     return item
-# 
-# 
-# @router.delete("/items/{item_id}", status_code=204)
-# async def delete_item(item_id: str) -> None:
-#     for i, item in enumerate(_ITEMS):
-#         if item.id == item_id:
-#             _ITEMS.pop(i)
-#             return
-#     raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
-# 
 
 # ── DynamoDB (uncomment when table is provisioned) ────────────────────────────
 #
