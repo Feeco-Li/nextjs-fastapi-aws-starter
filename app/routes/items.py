@@ -2,6 +2,7 @@
 Protected items resource — CRUD via Aurora PostgreSQL.
 JWT validation happens upstream in API Gateway before this code runs.
 """
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session

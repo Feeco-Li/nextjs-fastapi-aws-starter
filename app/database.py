@@ -45,8 +45,8 @@ class Base(DeclarativeBase):
 class ItemModel(Base):
     __tablename__ = "items"
 
-    id          = Column(String, primary_key=True)
-    name        = Column(String, nullable=False)
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
     description = Column(String, nullable=False)
 
 
