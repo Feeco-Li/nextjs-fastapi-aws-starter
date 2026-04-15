@@ -1,0 +1,362 @@
+================================================================================
+  FastAPI + PostgreSQL Practice Tasks
+  Build a comprehensive backend service step by step.
+  Domain: a multi-user Task Management & Collaboration platform.
+================================================================================
+
+Each task builds on the previous ones. Complete them in order.
+All routes live under /api/v1/ unless stated otherwise.
+The JWT-authenticated user identity is available via API Gateway headers —
+use the `x-amzn-oidc-identity` or decode the Authorization header as needed.
+
+--------------------------------------------------------------------------------
+PHASE 1 — Foundations (Tasks 1–10)
+  Get comfortable with models, CRUD, and validation.
+--------------------------------------------------------------------------------
+
+TASK 1 — User profile model
+  Create a `users` table with columns: id (UUID, PK), email (unique), display_name,
+  created_at, updated_at. Add a UserModel in database.py, register it with init_db.
+  No routes yet — just confirm the table is created on startup.
+
+TASK 2 — Upsert current user on first request
+  Add POST /users/me. Extract the Cognito `sub` claim from the Authorization Bearer
+  token (decode without verification — API Gateway already validated it). Upsert a row
+  in `users` using the sub as `id` and the `email` claim as email. Return the user.
+
+TASK 3 — Get and update current user
+  Add GET /users/me (return the current user row) and PATCH /users/me (update
+  display_name only). Use a Pydantic schema for the request body with proper
+  validation (min 2 chars, max 64 chars for display_name).
+
+TASK 4 — Projects model
+  Create a `projects` table: id (UUID), owner_id (FK → users.id), name, description,
+  created_at. Add ProjectModel. Define the SQLAlchemy relationship to UserModel.
+
+TASK 5 — Projects CRUD
+  POST /projects — create a project owned by the current user.
+  GET /projects — list projects owned by the current user.
+  GET /projects/{id} — get one project (only if owned by current user, else 404).
+  PATCH /projects/{id} — update name/description.
+  DELETE /projects/{id} — delete the project.
+
+TASK 6 — Tasks model
+  Create a `tasks` table: id (UUID), project_id (FK → projects.id), title, description,
+  status (enum: todo/in_progress/done), priority (enum: low/medium/high), due_date,
+  created_at, updated_at. Use a Python Enum and a SQLAlchemy Enum column type.
+
+TASK 7 — Tasks CRUD
+  Nest tasks under projects: all routes prefixed /projects/{project_id}/tasks.
+  Implement full CRUD (list, create, get, update, delete). Validate that the project
+  belongs to the current user before any operation — return 403 otherwise.
+
+TASK 8 — Input validation with Pydantic
+  Add strict Pydantic schemas (separate Request/Response models) for all existing
+  routes. Enforce: title max 200 chars, description max 2000 chars, due_date must be
+  in the future on creation. Return 422 with a clear message on validation failure.
+
+TASK 9 — Centralised error handling
+  Add a global exception handler in main.py. Map SQLAlchemy IntegrityError → 409,
+  NoResultFound → 404, and unhandled exceptions → 500 with a safe message (no stack
+  traces in response body). Log the full traceback server-side with Python `logging`.
+
+TASK 10 — Soft delete
+  Add a `deleted_at` nullable timestamp to both projects and tasks. Replace hard
+  DELETE with a soft delete (set deleted_at = now()). Filter out soft-deleted rows
+  in all list/get queries. Add GET /projects/archived to list soft-deleted projects.
+
+--------------------------------------------------------------------------------
+PHASE 2 — Relationships & Querying (Tasks 11–20)
+  Multi-user data, joins, filtering, sorting, pagination.
+--------------------------------------------------------------------------------
+
+TASK 11 — Project members
+  Create a `project_members` join table: project_id, user_id, role (enum:
+  viewer/editor/admin), joined_at. Allow the project owner to invite members via
+  POST /projects/{id}/members (body: { email, role }). Look up the user by email.
+
+TASK 12 — Member-based access control
+  Refactor all /projects/{id}/tasks routes. Access rules:
+    viewer  — can read tasks only
+    editor  — can read + create + update tasks
+    admin   — full access including delete
+  Owner always has full access. Return 403 with a descriptive message on violation.
+
+TASK 13 — Assign tasks to members
+  Add an `assignee_id` (FK → users.id, nullable) column to tasks. Add
+  PATCH /projects/{project_id}/tasks/{task_id}/assign — body: { user_id }.
+  Validate that the target user is a project member. Editors and admins can assign.
+
+TASK 14 — Pagination
+  Add cursor-based pagination to all list endpoints. Accept `limit` (default 20,
+  max 100) and `cursor` (opaque, encodes last-seen `created_at` + `id`). Return
+  `{ items: [...], next_cursor: "..." | null }` in the response.
+
+TASK 15 — Filtering and sorting
+  Extend GET /projects/{id}/tasks with query params:
+    status=todo|in_progress|done  (multi-value: ?status=todo&status=done)
+    priority=low|medium|high
+    assignee_id=<uuid>
+    due_before=<ISO date>
+    due_after=<ISO date>
+    sort=due_date|created_at|priority  (default: created_at)
+    order=asc|desc  (default: desc)
+  Build the SQLAlchemy query dynamically. All filters are optional and combinable.
+
+TASK 16 — Full-text search
+  Add GET /projects/{id}/tasks/search?q=<term>. Use PostgreSQL `tsvector` / `tsquery`
+  via SQLAlchemy's `func.to_tsvector` and `func.to_tsquery` to search task title
+  and description. Add a GIN index on the combined tsvector column via a migration
+  helper function called at startup.
+
+TASK 17 — Task comments
+  Create a `comments` table: id, task_id (FK), author_id (FK → users.id), body,
+  created_at, updated_at. Add nested CRUD under
+  /projects/{project_id}/tasks/{task_id}/comments. Authors can edit/delete their own
+  comments; admins can delete any comment.
+
+TASK 18 — Activity log
+  Create an `activity_log` table: id, project_id, actor_id, action (string),
+  entity_type (project/task/comment), entity_id, metadata (JSONB), created_at.
+  Write a helper `log_activity(session, ...)` and call it after every mutating
+  operation (create/update/delete task, assign, comment, member invite).
+  Add GET /projects/{id}/activity (paginated, newest first).
+
+TASK 19 — Aggregated project stats
+  Add GET /projects/{id}/stats. Return a single response computed with one SQL query
+  (no N+1): total tasks, tasks by status (todo/in_progress/done counts), tasks by
+  priority, overdue task count (due_date < now and status != done), member count.
+
+TASK 20 — User dashboard
+  Add GET /users/me/dashboard. Return: projects the user owns or is a member of
+  (with unread activity count), tasks assigned to the user across all projects
+  (sorted by due_date asc, limited to 10), and total open task count. Single DB
+  round-trip using joined loads or a CTE.
+
+--------------------------------------------------------------------------------
+PHASE 3 — Advanced Features (Tasks 21–30)
+  Background jobs, file handling, notifications, caching.
+--------------------------------------------------------------------------------
+
+TASK 21 — Background tasks with FastAPI BackgroundTasks
+  After a task is assigned to a user, send a "you've been assigned" notification.
+  For now, implement the notification as a log entry written by a FastAPI
+  BackgroundTask (runs after the response is sent). Create a `notifications` table:
+  id, user_id, message, read_at (nullable), created_at. Write the row in the
+  background task.
+
+TASK 22 — Notification endpoints
+  Add GET /users/me/notifications (paginated, unread first), and
+  PATCH /users/me/notifications/{id}/read and
+  PATCH /users/me/notifications/read-all.
+  Also trigger notifications for: comment on your task, added as project member.
+
+TASK 23 — File attachments
+  Create an `attachments` table: id, task_id (FK), uploader_id (FK), s3_key,
+  filename, size_bytes, mime_type, created_at. Add POST /tasks/{task_id}/attachments
+  accepting multipart/form-data. Upload the file to an S3 bucket (add a bucket in
+  CDK DatabaseConstruct or a new construct). Return a pre-signed GET URL valid for
+  1 hour. Add DELETE /tasks/{task_id}/attachments/{id} (deletes from S3 + DB).
+
+TASK 24 — Pre-signed upload URLs
+  Instead of streaming the file through Lambda, change the attachment flow to a
+  two-step process: POST /tasks/{task_id}/attachments/presign returns a pre-signed
+  S3 PUT URL and a pending attachment record. After the client uploads directly to
+  S3, the client calls POST /tasks/{task_id}/attachments/{id}/confirm to mark it
+  active. Discuss (in a code comment) why this is better for large files on Lambda.
+
+TASK 25 — Rate limiting with a sliding window
+  Implement a lightweight in-memory sliding-window rate limiter as FastAPI middleware.
+  Limit: 100 requests / 60 seconds per Cognito user id. Return 429 with a
+  Retry-After header. Note its limitation (resets on cold start) and add a TODO
+  comment explaining how you'd replace it with Redis or DynamoDB for persistence.
+
+TASK 26 — Response caching with ETags
+  Add ETag support to GET /projects/{id}/stats and GET /users/me/dashboard. Compute
+  a deterministic ETag from the response body (MD5 or SHA-1 hex). Return ETag header
+  and handle If-None-Match — respond 304 Not Modified when the ETag matches. No
+  external cache store needed.
+
+TASK 27 — Idempotency keys
+  Add idempotency support to POST /projects and POST /projects/{id}/tasks. Clients
+  send an `Idempotency-Key` header (UUID). Store (key, user_id, response_body,
+  created_at) in an `idempotency_keys` table. If the same key is replayed within
+  24 hours, return the original response with a 200 (not 201) and an
+  `X-Idempotent-Replay: true` header. Clean up keys older than 24 h at startup.
+
+TASK 28 — Bulk operations
+  Add POST /projects/{id}/tasks/bulk with a JSON body: { action: "delete"|"update",
+  task_ids: [...], data?: { status?, priority? } }. Cap task_ids at 100. Execute as
+  a single UPDATE/DELETE WHERE id = ANY(:ids). Return { affected: N }. Enforce the
+  same project membership + role rules as single-task mutations.
+
+TASK 29 — CSV export
+  Add GET /projects/{id}/tasks/export?format=csv. Stream a CSV file using
+  StreamingResponse (so Lambda doesn't buffer large payloads). Columns: id, title,
+  status, priority, assignee email, due_date, created_at. Set Content-Disposition:
+  attachment; filename="tasks-{project_id}.csv". Validate the user has at least
+  viewer access.
+
+TASK 30 — Scheduled cleanup Lambda
+  Add a second Lambda function in CDK (a standalone function, no API Gateway) that
+  runs on a CloudWatch Events schedule (daily at 02:00 UTC). It should: hard-delete
+  rows soft-deleted more than 30 days ago, purge idempotency_keys older than 24 h,
+  and log a summary. Reuse the same database connection logic from the main app.
+
+--------------------------------------------------------------------------------
+PHASE 4 — Robustness & Operations (Tasks 31–40)
+  Migrations, testing, observability, security hardening.
+--------------------------------------------------------------------------------
+
+TASK 31 — Alembic migrations
+  Replace init_db()'s create_all() with Alembic. Initialise Alembic in the repo,
+  write an initial migration that creates all existing tables, and add a second
+  migration that adds a `color` (hex string, nullable) column to projects. Wire
+  `alembic upgrade head` into the Lambda startup lifespan so migrations run
+  automatically on cold start.
+
+TASK 32 — Unit tests for route logic
+  Install pytest and pytest-asyncio. Write unit tests for: the token-extraction
+  helper, the access-control helper, the pagination cursor encode/decode, and the
+  ETag computation. No database or HTTP needed — test pure functions only. Aim for
+  100% branch coverage on these helpers.
+
+TASK 33 — Integration tests with a real database
+  Add a pytest fixture that spins up a temporary PostgreSQL schema (using the
+  DATABASE_URL from .env), runs Alembic migrations, and tears down after each test
+  module. Write integration tests for the full CRUD lifecycle of projects and tasks,
+  including the 403 / 404 / 409 error paths. Use httpx.AsyncClient with the FastAPI
+  app directly (no real HTTP server needed).
+
+TASK 34 — Structured logging
+  Replace all print() and ad-hoc logging with Python `structlog` (or stdlib logging
+  with a JSON formatter). Every log entry must include: request_id (from the Lambda
+  context or a generated UUID), user_id, method, path, status_code, duration_ms.
+  Add a middleware that sets these fields and logs one line per request at INFO level.
+
+TASK 35 — Health check hardening
+  Extend GET /health (currently public) to return { status, db: "ok"|"error",
+  version, uptime_seconds }. Test the DB connection with a lightweight
+  `SELECT 1` query. If it fails, return HTTP 503 with db: "error". Add the health
+  check URL as a CloudWatch alarm target via CDK (alarm if 2 consecutive checks fail).
+
+TASK 36 — Secrets rotation safety
+  Aurora credentials in Secrets Manager can be rotated. Make the DB engine
+  lazy-initialised and add a middleware that catches SQLAlchemy OperationalError
+  (auth failure) on the first request after a rotation, re-reads the secret, rebuilds
+  the engine, and retries the request once before returning 503.
+
+TASK 37 — Input sanitisation
+  Audit all text inputs (task title, description, comment body, project name).
+  Strip leading/trailing whitespace. Reject inputs containing null bytes (\x00).
+  Add a reusable Pydantic validator (`@field_validator`) and apply it to all string
+  fields across every schema. Write tests that confirm null-byte payloads return 422.
+
+TASK 38 — SQL injection hardening audit
+  Review every raw SQL or text() call in the codebase (especially the full-text
+  search and bulk-operation routes). Confirm all user-supplied values flow through
+  SQLAlchemy's bound parameters, never string interpolation. Add a comment on each
+  query explaining why it is safe. Write a test that passes a classic injection
+  string ("'; DROP TABLE tasks; --") as a search term and asserts it does not error.
+
+TASK 39 — API versioning
+  Add a /api/v2 prefix alongside /api/v1. In v2, change the task list response to
+  nest comments and assignee details inline (using joined eager loading). Keep v1
+  unchanged. Add a deprecation header `Sunset: <date 6 months from now>` to all v1
+  responses. Document the migration path in a MIGRATION.md file.
+
+TASK 40 — OpenAPI documentation
+  Enrich the auto-generated OpenAPI schema: add summary, description, and
+  response_model (with examples) to every route. Tag routes by domain (projects,
+  tasks, users, notifications). Add a custom openapi() override in main.py that
+  injects the Cognito JWT bearer security scheme so the Swagger UI /docs "Authorize"
+  button works. Test that every route appears correctly in the generated schema.
+
+--------------------------------------------------------------------------------
+PHASE 5 — Advanced Patterns (Tasks 41–50)
+  Real-time, multi-tenancy, performance, and architecture polish.
+--------------------------------------------------------------------------------
+
+TASK 41 — WebSocket notifications (local dev only)
+  Add a WebSocket endpoint at /ws/notifications that the frontend can connect to.
+  On Lambda this won't work in production (stateless), so gate it behind a
+  IS_LOCAL env flag. Locally, maintain an in-memory dict of {user_id: WebSocket}.
+  When a notification row is inserted (via a DB trigger or post-insert hook),
+  push it to the connected client. Document why this doesn't scale on Lambda.
+
+TASK 42 — Multi-tenancy: organisations
+  Add an `organisations` table: id, name, created_at. Add `org_id` (FK, nullable
+  initially) to users and projects. Implement POST /organisations and
+  POST /organisations/{id}/invite (invite a user by email). Scope all project
+  queries to the user's org_id when set. This is a schema migration + access-control
+  refactor — plan carefully before writing code.
+
+TASK 43 — Row-level PostgreSQL permissions with policies
+  Enable PostgreSQL Row-Level Security on the `tasks` table. Write RLS policies
+  (as SQL run at migration time) that allow SELECT only when the current_setting
+  `app.current_user_id` matches a project member. Set the setting in each DB
+  session from the Lambda handler. Document the trade-offs of RLS vs. application-
+  level filtering.
+
+TASK 44 — Connection pooling with PgBouncer / RDS Proxy
+  Lambda opens a new DB connection on every cold start. Add AWS RDS Proxy in the CDK
+  DatabaseConstruct (it's natively supported). Update the DB endpoint in the Lambda
+  env vars to point to the proxy. Explain in a comment block what problem this solves
+  and what `max_overflow=0` in SQLAlchemy means in this context.
+
+TASK 45 — Read replica routing
+  Aurora Serverless v2 supports a reader endpoint. Add a reader engine in database.py
+  initialised with the reader endpoint. Add a `read_session()` context manager that
+  returns a session bound to the reader. Use it in all GET-only routes. Document the
+  trade-off: read-your-writes consistency is not guaranteed.
+
+TASK 46 — Async SQLAlchemy
+  Migrate database.py from synchronous SQLAlchemy to async SQLAlchemy (asyncpg
+  driver). Update all route handlers to use `async with AsyncSession`. Keep the
+  existing sync engine available for the Alembic CLI (Alembic can't use the async
+  engine directly). Verify that all integration tests still pass.
+
+TASK 47 — Dependency injection refactor
+  Extract the "get current user" logic into a FastAPI `Depends` dependency. Extract
+  "get project + verify membership" into a parametrised dependency factory:
+  `require_project_role(minimum_role: Role)`. Replace the repetitive guard code in
+  every route with these dependencies. Routes should have no auth boilerplate.
+
+TASK 48 — Event-driven architecture with SQS
+  Add an SQS queue in CDK. After any task status change to "done", publish a message
+  `{ task_id, project_id, completed_by, completed_at }` to the queue. Add a second
+  Lambda triggered by the SQS queue that computes project completion percentage and
+  writes it to a `project_stats` cache table. The API reads from this cache table
+  instead of recomputing on every request.
+
+TASK 49 — Feature flags
+  Implement a lightweight feature-flag system backed by a `feature_flags` table:
+  (name, enabled, allowed_user_ids JSONB, rollout_percentage). Add a cached helper
+  `is_enabled(flag_name, user_id)` that checks the table (cache in-process with a
+  30-second TTL). Gate the new v2 nested-response format and the async DB engine
+  behind flags. Add admin-only endpoints to toggle flags (check for an `admin`
+  Cognito group claim).
+
+TASK 50 — Load test and bottleneck analysis
+  Write a Locust (or k6) load-test script that simulates 50 concurrent users each:
+  creating a project, adding 10 tasks, listing tasks with filters, and posting
+  comments. Run it against your local dev server. Use `EXPLAIN ANALYZE` (via
+  SQLAlchemy `text()`) on the slowest queries. Add the missing indexes you discover,
+  rerun the test, and record before/after p95 latency in a BENCHMARKS.md file.
+  This is the capstone — a complete, observable, production-ready backend.
+
+================================================================================
+  Tips
+================================================================================
+
+- Read the existing code in app/ and lib/ before each task.
+- Run `make dev` to test locally against a local PostgreSQL.
+- Use `make deploy` to test on AWS after each phase.
+- Keep commits small and focused — one task per commit is ideal.
+- If a task says "document" or "explain", write it as a code comment or a small
+  .md file — not just in your head.
+- The domain (task management) is intentionally boring so you focus on the backend
+  patterns, not the business logic.
+
+Good luck.
+================================================================================
