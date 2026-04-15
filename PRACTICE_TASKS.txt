@@ -14,11 +14,6 @@ PHASE 1 — Foundations (Tasks 1–10)
   Get comfortable with models, CRUD, and validation.
 --------------------------------------------------------------------------------
 
-TASK 3 — Get and update current user
-  Add GET /users/me (return the current user row) and PATCH /users/me (update
-  display_name only). Use a Pydantic schema for the request body with proper
-  validation (min 2 chars, max 64 chars for display_name).
-
 TASK 4 — Projects model
   Create a `projects` table: id (UUID), owner_id (FK → users.id), name, description,
   created_at. Add ProjectModel. Define the SQLAlchemy relationship to UserModel.

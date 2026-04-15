@@ -4,7 +4,7 @@ from datetime import date
 from fastapi import APIRouter
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
-
+from sqlalchemy import select
 from app.database import get_engine, UserModel
 
 router = APIRouter(tags=["users"])
@@ -49,7 +49,27 @@ def create_user(body: UserCreate) -> UserResponse:
         session.add(user)
         session.commit()
         session.refresh(user)
+        return UserResponse(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
+        )
 
+
+"""
+TASK 3 — Get and update current user
+  Add GET /users/me (return the current user row) and PATCH /users/me (update
+  display_name only). Use a Pydantic schema for the request body with proper
+  validation (min 2 chars, max 64 chars for display_name).
+"""
+
+
+@router.get("/users/{user_id}", response_model=UserResponse, status_code=201)
+def get_user(user_id) -> UserResponse:
+    with Session(get_engine()) as session:
+        user = session.execute(select(UserModel).filter_by(id=user_id)).scalar_one()
         return UserResponse(
             id=user.id,
             email=user.email,
