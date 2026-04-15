@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import { NetworkConstruct } from './constructs/network';
 import { AuthConstruct } from './constructs/auth';
 import { DatabaseConstruct } from './constructs/database';
 import { ApiConstruct } from './constructs/api';
@@ -8,9 +9,10 @@ export class MainStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
+    const network  = new NetworkConstruct(this, 'Network');
     const auth     = new AuthConstruct(this, 'Auth');
-    const database = new DatabaseConstruct(this, 'Database');
-    const api      = new ApiConstruct(this, 'Api', { auth, database });
+    const database = new DatabaseConstruct(this, 'Database', { vpc: network.vpc });
+    const api      = new ApiConstruct(this, 'Api', { auth, database, vpc: network.vpc });
 
     // ── Outputs ───────────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'UserPoolId', {
@@ -31,6 +33,11 @@ export class MainStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'Region', {
       description: 'Deployment region  →  NEXT_PUBLIC_AWS_REGION',
       value: this.region,
+    });
+
+    new cdk.CfnOutput(this, 'AuroraEndpoint', {
+      description: 'Aurora PostgreSQL cluster endpoint (credentials in Secrets Manager)',
+      value: database.cluster.clusterEndpoint.hostname,
     });
   }
 }

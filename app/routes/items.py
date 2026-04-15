@@ -1,27 +1,11 @@
 """
-Example protected resource.
-
-By the time a request reaches this handler:
-  • API Gateway has already validated the Cognito JWT.
-  • An invalid / missing token would have received a 401 before Lambda ran.
-
-FastAPI has zero auth logic — just business logic.
-Replace the in-memory list with real DynamoDB queries when ready —
-see the commented-out section below.
+Protected items resource — CRUD via Aurora PostgreSQL.
+JWT validation happens upstream in API Gateway before this code runs.
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings
-import boto3
-
-
-class Settings(BaseSettings):
-    items_table: str
-
-    model_config = {"env_file": ".env", "extra": "ignore"}
-
-
-settings = Settings()
+from sqlalchemy.orm import Session
+from app.database import get_engine, ItemModel
 
 router = APIRouter(tags=["items"])
 
@@ -32,48 +16,35 @@ class Item(BaseModel):
     description: str
 
 
-# ── In-memory sample data ─────────────────────────────────────────────────────
-# Swap for DynamoDB when ready (see commented-out section below).
-# 
-# _ITEMS: list[Item] = [
-#     Item(id="1", name="Widget A", description="First sample item"),
-#     Item(id="2", name="Widget B", description="Second sample item"),
-#     Item(id="3", name="Widget C", description="Third sample item"),
-# ]
-# 
-# 
-# @router.get("/items", response_model=list[Item])
-# async def list_items() -> list[Item]:
-#     return _ITEMS
-# 
-
-# ── DynamoDB (uncomment when table is provisioned) ────────────────────────────
-#
-
-table = boto3.resource("dynamodb").Table(settings.items_table)
-
-
 @router.get("/items", response_model=list[Item])
-async def list_items() -> list[Item]:
-    result = table.scan()
-    return result["Items"]
+def list_items() -> list[Item]:
+    with Session(get_engine()) as session:
+        rows = session.query(ItemModel).all()
+        return [Item(id=r.id, name=r.name, description=r.description) for r in rows]
 
 
 @router.get("/items/{item_id}", response_model=Item)
-async def get_item(item_id: str) -> Item:
-    result = table.get_item(Key={"id": item_id})
-    item = result.get("Item")
-    if not item:
-        raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
-    return item
+def get_item(item_id: str) -> Item:
+    with Session(get_engine()) as session:
+        row = session.get(ItemModel, item_id)
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+        return Item(id=row.id, name=row.name, description=row.description)
 
 
 @router.post("/items", response_model=Item, status_code=201)
-async def create_item(item: Item) -> Item:
-    table.put_item(Item=item.model_dump())
-    return item
+def create_item(item: Item) -> Item:
+    with Session(get_engine()) as session:
+        session.add(ItemModel(id=item.id, name=item.name, description=item.description))
+        session.commit()
+        return item
 
 
 @router.delete("/items/{item_id}", status_code=204)
-async def delete_item(item_id: str) -> None:
-    table.delete_item(Key={"id": item_id})
+def delete_item(item_id: str) -> None:
+    with Session(get_engine()) as session:
+        row = session.get(ItemModel, item_id)
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+        session.delete(row)
+        session.commit()

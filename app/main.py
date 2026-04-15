@@ -4,18 +4,27 @@ FastAPI application.
 Completely stateless — no sessions, no login endpoints, no refresh logic.
 JWT validation happens upstream in API Gateway before this code is ever called.
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.database import init_db
 from app.routes import health, items
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()   # creates tables if they don't exist
+    yield
+
 
 app = FastAPI(
     title="FastAPI CDK Starter",
     description="Stateless API — JWT validation delegated to Amazon API Gateway",
     version="0.1.0",
-    # Swagger UI available at /docs (useful during development)
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS is also enforced by API Gateway, but keeping it here ensures

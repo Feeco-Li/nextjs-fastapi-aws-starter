@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
@@ -10,6 +11,7 @@ import { DatabaseConstruct } from './database';
 interface ApiProps {
   auth: AuthConstruct;
   database: DatabaseConstruct;
+  vpc: ec2.Vpc;
 }
 
 export class ApiConstruct extends Construct {
@@ -18,8 +20,21 @@ export class ApiConstruct extends Construct {
   constructor(scope: Construct, id: string, props: ApiProps) {
     super(scope, id);
 
-    const { auth, database } = props;
+    const { auth, database, vpc } = props;
     const stackName = cdk.Stack.of(this).stackName;
+
+    // ── Lambda security group ─────────────────────────────────────────────────
+    const lambdaSg = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
+      vpc,
+      description: 'Lambda API function — outbound to Aurora on 5432',
+    });
+
+    // Allow Lambda to connect to Aurora PostgreSQL
+    database.securityGroup.addIngressRule(
+      lambdaSg,
+      ec2.Port.tcp(5432),
+      'Lambda → Aurora PostgreSQL',
+    );
 
     // ── Lambda ────────────────────────────────────────────────────────────────
     const apiFn = new lambda.Function(this, 'ApiFunction', {
@@ -46,19 +61,20 @@ export class ApiConstruct extends Construct {
       }),
       timeout: cdk.Duration.seconds(29),
       memorySize: 512,
+      vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [lambdaSg],
       environment: {
-        ENVIRONMENT: 'dev',
-        // Add a new env var here for every new table in DatabaseConstruct.
-        ITEMS_TABLE: database.itemsTable.tableName,
-        // ORDERS_TABLE:   database.ordersTable.tableName,
-        // INVOICES_TABLE: database.invoicesTable.tableName,
+        ENVIRONMENT: 'production',
+        DB_SECRET_ARN: database.cluster.secret!.secretArn,
+        DB_HOST: database.cluster.clusterEndpoint.hostname,
+        DB_PORT: database.cluster.clusterEndpoint.port.toString(),
+        DB_NAME: 'appdb',
       },
     });
 
-    // Grant Lambda read/write access to each table.
-    database.itemsTable.grantReadWriteData(apiFn);
-    // database.ordersTable.grantReadWriteData(apiFn);
-    // database.invoicesTable.grantReadWriteData(apiFn);
+    // Grant Lambda read access to the Aurora credentials secret
+    database.cluster.secret!.grantRead(apiFn);
 
     // ── API Gateway ───────────────────────────────────────────────────────────
     const api = new apigwv2.HttpApi(this, 'ApiGateway', {
