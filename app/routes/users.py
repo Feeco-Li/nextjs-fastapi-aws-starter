@@ -1,0 +1,51 @@
+from uuid import uuid4, UUID
+from datetime import date
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, EmailStr
+from sqlalchemy.orm import Session
+
+from app.database import get_engine, UserModel
+
+router = APIRouter(tags=["users"])
+
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    display_name: str
+
+
+class UserResponse(BaseModel):
+    id: UUID
+    email: str
+    display_name: str
+    created_at: date
+    updated_at: date
+
+
+@router.post("/users", response_model=UserResponse, status_code=201)
+def create_user(body: UserCreate) -> UserResponse:
+    with Session(get_engine()) as session:
+        existing = session.query(UserModel).filter_by(email=body.email).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+        today = date.today()
+        user = UserModel(
+            id=uuid4(),
+            email=body.email,
+            display_name=body.display_name,
+            created_at=today,
+            updated_at=today,
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+        return UserResponse(
+            id=user.id,
+            email=user.email,
+            display_name=user.display_name,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
+        )

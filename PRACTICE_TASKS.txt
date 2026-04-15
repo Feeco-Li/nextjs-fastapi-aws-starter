@@ -14,10 +14,6 @@ PHASE 1 — Foundations (Tasks 1–10)
   Get comfortable with models, CRUD, and validation.
 --------------------------------------------------------------------------------
 
-TASK 2 — Upsert current user on first request
-  Add POST /users/me. Extract the Cognito `sub` claim from the Authorization Bearer
-  token (decode without verification — API Gateway already validated it). Upsert a row
-  in `users` using the sub as `id` and the `email` claim as email. Return the user.
 
 TASK 3 — Get and update current user
   Add GET /users/me (return the current user row) and PATCH /users/me (update
