@@ -33,8 +33,11 @@ TASK 2 — Upsert current user on first request
 
 @router.post("/users", response_model=UserResponse, status_code=201)
 def create_user(body: UserCreate) -> UserResponse:
+    print("hello world")
     with Session(get_engine()) as session:
-        existing = session.query(UserModel).filter_by(email=body.email).first()
+        # existing = session.query(UserModel).filter_by(email=body.email).first()
+        existing = session.scalar(select(UserModel).filter_by(email=body.email))
+        print(existing)
         if existing:
             raise HTTPException(status_code=409, detail="Email already registered")
 

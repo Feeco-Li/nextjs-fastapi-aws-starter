@@ -1,0 +1,45 @@
+### Configuration Variables
+@baseUrl = http://localhost:8000/api/v1
+
+### 1. CREATE - Register a new user
+POST {{baseUrl}}/users
+
+{
+    "display_name": "Jane Doe",
+    "email": "jane.doe@example.com",
+}
+
+###
+
+### 2. READ - Get all users
+GET {{baseUrl}}/users
+
+###
+
+### 3. READ - Get a specific user by ID
+# @name getUser
+GET {{baseUrl}}/users/123
+
+###
+
+### 4. UPDATE - Update user details (Full Update)
+PUT {{baseUrl}}/users/123
+
+{
+    "display_name": "Jane Smith",
+    "email": "jane.smith@example.com",
+}
+
+###
+
+### 5. UPDATE - Partially update user (e.g., change role)
+PATCH {{baseUrl}}/users/123
+
+{
+    "role": "super-user"
+}
+
+###
+
+### 6. DELETE - Remove a user
+DELETE {{baseUrl}}/users/123
